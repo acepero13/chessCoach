@@ -162,6 +162,36 @@ class StockfishEngine:
 
         return evaluations
 
+    async def evaluate_move(
+        self, fen: str, move_uci: str, eval_before: float = None, depth: int = None
+    ) -> dict:
+        """
+        Evaluate a specific move in a position.
+        Returns centipawn loss and classification for that move.
+        Passing eval_before skips re-analysing the initial position (saves one engine call).
+        """
+        depth = depth or settings.analysis_depth
+        board = chess.Board(fen)
+        move = chess.Move.from_uci(move_uci)
+        move_san = board.san(move)
+        color = board.turn
+
+        if eval_before is None:
+            info_before = await self._analyse(board, depth)
+            eval_before = _pov_cp(info_before["score"], color)
+
+        board.push(move)
+        info_after = await self._analyse(board, depth)
+        eval_after = -_pov_cp(info_after["score"], board.turn)   # back to original mover's pov
+
+        cp_loss = max(0.0, eval_before - eval_after)
+        return {
+            "move_san": move_san,
+            "eval_after": eval_after,
+            "centipawn_loss": cp_loss,
+            "classification": classify_move(cp_loss),
+        }
+
     async def get_best_move(self, fen: str, depth: int = None) -> dict:
         """Get best move for a given FEN position."""
         depth = depth or settings.stockfish_depth

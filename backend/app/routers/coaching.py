@@ -1,6 +1,7 @@
 """
 Interactive coaching session endpoints.
 """
+import chess
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -11,6 +12,48 @@ from app.database import get_db
 from app.models import Game, GameAnalysis, CoachingSession, PerformanceProfile
 from app.llm.explainer import explain_mistake, generate_position_question
 from app.engine.stockfish import get_engine
+from app.patterns.tactical_detectors import _is_hanging
+
+
+def _pv_uci_to_san(fen: str, pv_uci: list[str]) -> list[str]:
+    """Convert a UCI principal variation to SAN notation from the given FEN."""
+    board = chess.Board(fen)
+    san_moves = []
+    for uci in pv_uci:
+        try:
+            move = chess.Move.from_uci(uci)
+            san_moves.append(board.san(move))
+            board.push(move)
+        except Exception:
+            break
+    return san_moves
+
+
+def _validated_patterns(
+    all_patterns: list[dict],
+    move_number: int,
+    fen: str,
+    best_move_uci: str,
+) -> list[dict]:
+    """
+    Return patterns for a move, filtering out stale false positives from old analyses.
+    Specifically: 'hanging_piece_missed' is suppressed when the engine's best move is
+    not actually a capture of a hanging piece.
+    """
+    result = []
+    for p in all_patterns:
+        if p.get("move_number") != move_number:
+            continue
+        if p.get("type") == "hanging_piece_missed" and best_move_uci:
+            try:
+                board = chess.Board(fen)
+                bm = chess.Move.from_uci(best_move_uci)
+                if not (board.is_capture(bm) and _is_hanging(board, bm.to_square)):
+                    continue  # suppress stale false positive
+            except Exception:
+                pass
+        result.append(p)
+    return result
 
 router = APIRouter(prefix="/coaching", tags=["coaching"])
 
@@ -69,16 +112,21 @@ async def start_coaching_session(
     # Get first critical move
     first_idx = critical_indices[0]
     move_eval = evals[first_idx]
-    patterns_at_move = [
-        p for p in (analysis.patterns_detected or [])
-        if p.get("move_number") == move_eval["move_number"]
-    ]
+    patterns_at_move = _validated_patterns(
+        analysis.patterns_detected or [],
+        move_eval["move_number"],
+        move_eval["fen"],
+        move_eval.get("best_move_uci", ""),
+    )
 
     question_data = await generate_position_question(
         fen=move_eval["fen"],
         pattern_type=patterns_at_move[0]["type"] if patterns_at_move else "general",
         move_number=move_eval["move_number"],
         color=move_eval["color"],
+        best_move_san=move_eval.get("best_move_san", ""),
+        centipawn_loss=move_eval.get("centipawn_loss", 0.0),
+        classification=move_eval.get("classification", "mistake"),
     )
 
     return {
@@ -141,29 +189,67 @@ async def submit_answer(
         return {"message": "All critical positions reviewed!", "completed": True}
 
     move_eval = evals[critical_indices[current_idx]]
-    patterns_at_move = [
-        p for p in (analysis.patterns_detected or [])
-        if p.get("move_number") == move_eval["move_number"]
-    ]
 
-    # Get engine best move details
+    # Get engine best move details and convert PV to SAN for the LLM
     engine = await get_engine()
     engine_info = await engine.get_best_move(move_eval["fen"])
-    pv_moves = engine_info.get("pv", [])[:5]
+    pv_uci = engine_info.get("pv", [])[:5]
+    pv_san = _pv_uci_to_san(move_eval["fen"], pv_uci)
+
+    # Validate stored patterns — filter out stale false positives from old analyses
+    best_move_uci = engine_info.get("best_move_uci") or move_eval.get("best_move_uci", "")
+    patterns_at_move = _validated_patterns(
+        analysis.patterns_detected or [],
+        move_eval["move_number"],
+        move_eval["fen"],
+        best_move_uci,
+    )
 
     user_elo = game.white_elo if user_color == "white" else game.black_elo
     user_rating = user_elo or 1200
 
-    # Generate explanation
+    # Try to parse the student's typed answer as a legal chess move and evaluate it
+    student_move_san = ""
+    student_cp_loss = None
+    student_classification = ""
+    fen = move_eval["fen"]
+    board = chess.Board(fen)
+    student_move_obj = None
+
+    raw_answer = req.user_answer.strip()
+    # Try SAN first, then UCI
+    for parser in (board.parse_san, chess.Move.from_uci):
+        try:
+            candidate = parser(raw_answer)
+            if candidate in board.legal_moves:
+                student_move_obj = candidate
+                break
+        except Exception:
+            pass
+
+    if student_move_obj:
+        student_move_san = board.san(student_move_obj)
+        eval_result = await engine.evaluate_move(
+            fen=fen,
+            move_uci=student_move_obj.uci(),
+            eval_before=move_eval.get("eval_before"),
+        )
+        student_cp_loss = eval_result["centipawn_loss"]
+        student_classification = eval_result["classification"]
+
+    # Generate explanation comparing student's suggestion, game move, and engine best
     explanation = await explain_mistake(
         move_san=move_eval["move_san"],
         best_move_san=move_eval["best_move_san"],
-        fen=move_eval["fen"],
+        fen=fen,
         centipawn_loss=move_eval["centipawn_loss"],
         classification=move_eval["classification"],
         patterns=patterns_at_move,
-        engine_pv=pv_moves,
+        engine_pv_san=pv_san,
         user_rating=user_rating,
+        student_move_san=student_move_san,
+        student_cp_loss=student_cp_loss,
+        student_classification=student_classification,
     )
 
     # Save interaction
@@ -171,6 +257,9 @@ async def submit_answer(
         "move_index": critical_indices[current_idx],
         "move_san": move_eval["move_san"],
         "user_answer": req.user_answer,
+        "student_move_san": student_move_san,
+        "student_cp_loss": student_cp_loss,
+        "student_classification": student_classification,
         "engine_best": move_eval["best_move_san"],
         "centipawn_loss": move_eval["centipawn_loss"],
         "classification": move_eval["classification"],
@@ -194,15 +283,20 @@ async def submit_answer(
     if not is_complete:
         next_idx = critical_indices[session.current_move_index]
         next_eval = evals[next_idx]
-        next_patterns = [
-            p for p in (analysis.patterns_detected or [])
-            if p.get("move_number") == next_eval["move_number"]
-        ]
+        next_patterns = _validated_patterns(
+            analysis.patterns_detected or [],
+            next_eval["move_number"],
+            next_eval["fen"],
+            next_eval.get("best_move_uci", ""),
+        )
         next_question_data = await generate_position_question(
             fen=next_eval["fen"],
             pattern_type=next_patterns[0]["type"] if next_patterns else "general",
             move_number=next_eval["move_number"],
             color=next_eval["color"],
+            best_move_san=next_eval.get("best_move_san", ""),
+            centipawn_loss=next_eval.get("centipawn_loss", 0.0),
+            classification=next_eval.get("classification", "mistake"),
         )
         next_position = {
             "fen": next_eval["fen"],
@@ -217,11 +311,18 @@ async def submit_answer(
 
     return {
         "explanation": explanation,
-        "engine_best_move": move_eval["best_move_san"],
+        # Game move (what was actually played)
+        "game_move": move_eval["move_san"],
         "eval_swing": move_eval["centipawn_loss"],
         "classification": move_eval["classification"],
+        # Student's typed suggestion (if it was a legal move)
+        "student_move": student_move_san or None,
+        "student_cp_loss": student_cp_loss,
+        "student_classification": student_classification or None,
+        # Engine
+        "engine_best_move": move_eval["best_move_san"],
+        "engine_line": pv_san,
         "patterns_detected": patterns_at_move,
-        "engine_line": pv_moves,
         "completed": is_complete,
         "next_position": next_position,
         "next_question": next_question,

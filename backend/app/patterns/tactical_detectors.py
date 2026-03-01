@@ -183,23 +183,49 @@ def detect_tactical_patterns(move_evals: list[MoveEval]) -> list[dict]:
             })
             continue
 
-        # 4. Hanging piece missed (opponent had a hanging piece, user didn't take it)
+        # 4. Hanging piece missed — only when the engine's best move IS the capture
+        #    of a piece that is genuinely hanging (undefended/underdefended).
+        #    Do NOT fire just because some hanging piece exists elsewhere on the board;
+        #    the engine must confirm that capturing it was the right choice.
         if ev.centipawn_loss > 50:
-            hanging_before = _count_hanging_pieces(board, board.turn)
             user_move = chess.Move.from_uci(ev.move_uci)
-            if hanging_before > 0 and not board.is_capture(user_move):
+            if (
+                board.is_capture(best_move)           # engine's best IS a capture
+                and not board.is_capture(user_move)   # user did not capture
+                and _is_hanging(board, best_move.to_square)  # captured piece is hanging
+            ):
                 patterns.append({
                     "type": "hanging_piece_missed",
                     "move_number": ev.move_number,
                     "color": ev.color,
                     "severity": round(min(1.0, ev.centipawn_loss / 250), 3),
                     "fen": ev.fen,
-                    "description": f"Missed capturing a hanging piece, played {ev.move_san}",
+                    "description": (
+                        f"Missed capturing the hanging piece with {ev.best_move_san}, "
+                        f"played {ev.move_san} instead"
+                    ),
                     "move_san": ev.move_san,
                 })
                 continue
 
-        # 5. Blunder that hangs own piece (separate from missed-tactic, can co-exist)
+        # 5. Positional error fallback — no specific tactic was missed, but the move
+        #    is still a significant mistake (centipawn loss without tactical explanation).
+        #    Only emitted when none of the above patterns matched (all above used `continue`).
+        if ev.centipawn_loss > 60:
+            patterns.append({
+                "type": "positional_error",
+                "move_number": ev.move_number,
+                "color": ev.color,
+                "severity": round(min(1.0, ev.centipawn_loss / 300), 3),
+                "fen": ev.fen,
+                "description": (
+                    f"{ev.move_san} was a positional error — "
+                    f"engine preferred {ev.best_move_san} ({ev.centipawn_loss:.0f} cp better)"
+                ),
+                "move_san": ev.move_san,
+            })
+
+        # 6. Blunder that hangs own piece (separate from missed-tactic, can co-exist)
         if ev.classification == "blunder" and ev.centipawn_loss > 150:
             board_after = board.copy()
             board_after.push(chess.Move.from_uci(ev.move_uci))

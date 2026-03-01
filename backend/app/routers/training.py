@@ -20,6 +20,7 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
         select(PerformanceProfile)
         .where(PerformanceProfile.user_id == user_id)
         .order_by(PerformanceProfile.created_at.desc())
+        .limit(1)
     )
     profile = result.scalar_one_or_none()
     if not profile:
@@ -59,6 +60,7 @@ async def get_latest_plan(user_id: int, db: AsyncSession = Depends(get_db)):
         select(TrainingPlan)
         .where(TrainingPlan.user_id == user_id)
         .order_by(TrainingPlan.created_at.desc())
+        .limit(1)
     )
     plan = result.scalar_one_or_none()
     if not plan:
@@ -73,6 +75,7 @@ async def get_performance_summary(user_id: int, db: AsyncSession = Depends(get_d
         select(PerformanceProfile)
         .where(PerformanceProfile.user_id == user_id)
         .order_by(PerformanceProfile.created_at.desc())
+        .limit(1)
     )
     profile = result.scalar_one_or_none()
     if not profile:

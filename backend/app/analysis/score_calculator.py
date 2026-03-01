@@ -51,8 +51,8 @@ class RawMetrics:
     mate_threats_created: int = 0
 
     # --- Defense ---
-    blunders_under_pressure: int = 0    # blunders when eval_before < -50
-    moves_under_pressure: int = 0       # all moves when eval_before < -50
+    blunders_under_pressure: int = 0    # blunders when eval_before < -150
+    moves_under_pressure: int = 0       # all moves when eval_before < -150
 
     # --- Opening (accuracy of first 10 moves, Lichess win-prob formula) ---
     opening_accuracy_sum: float = 0.0
@@ -132,7 +132,7 @@ def compute_attack_score(m: RawMetrics) -> float:
 
 def compute_defense_score(m: RawMetrics) -> float:
     """
-    How well the player avoids blunders when under pressure (eval < -50cp).
+    How well the player avoids blunders when under real pressure (eval < -150cp).
     """
     if m.moves_under_pressure == 0:
         return 50.0
@@ -145,20 +145,14 @@ def compute_defense_score(m: RawMetrics) -> float:
 def compute_opening_score(m: RawMetrics) -> float:
     """
     Average accuracy of the user's first 10 moves using the Lichess
-    win-probability formula per move, blended with mistake rate.
+    win-probability formula per move. The win-prob formula already encodes
+    both the frequency and severity of errors, so no separate mistake-rate
+    component is needed.
     """
     if m.games_with_opening == 0:
         return 50.0
 
-    avg_acc = m.opening_accuracy_sum / m.games_with_opening
-
-    if m.opening_moves_total > 0:
-        mistake_rate = m.opening_mistakes / m.opening_moves_total
-        # 0 mistakes → 100; 30%+ mistake rate → 0
-        mistake_component = (1.0 - min(1.0, mistake_rate / 0.3)) * 100
-        return _clamp(avg_acc * 0.7 + mistake_component * 0.3)
-
-    return _clamp(avg_acc)
+    return _clamp(m.opening_accuracy_sum / m.games_with_opening)
 
 
 def compute_strategy_score(m: RawMetrics) -> float:
@@ -210,7 +204,7 @@ def compute_strategy_score(m: RawMetrics) -> float:
         bad_rate = m.bad_bvn_trades / m.bvn_trades_total
         bvn_score = _clamp((1.0 - bad_rate) * 100.0)
     else:
-        bvn_score = 75.0  # neutral — no trades detected
+        bvn_score = 50.0  # neutral — no trades detected
 
     return _clamp(
         k_score   * 0.25
@@ -359,8 +353,8 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
             if move_san in ("O-O", "O-O-O") and move_num <= 15 and not castled_early:
                 castled_early = True
 
-            # Attack: non-losing positions
-            if eval_before > -50:
+            # Attack: positions where user has the initiative (at least equal or better)
+            if eval_before > 50:
                 m.attacking_moves_total += 1
                 if cls in ("best", "good"):
                     m.attacking_moves_good += 1
@@ -370,8 +364,8 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
                 if e.get("is_check") and cls in ("best", "good"):
                     m.mate_threats_created += 1
 
-            # Defense: under pressure
-            if eval_before < -50:
+            # Defense: under real pressure (down by more than 1.5 pawns)
+            if eval_before < -150:
                 m.moves_under_pressure += 1
                 if cls == "blunder":
                     m.blunders_under_pressure += 1
@@ -450,29 +444,41 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
             m.games_with_opening += 1
 
         # ----------------------------------------------------------------
-        # Endgame + Conversion: winning positions (>200cp user advantage)
+        # Conversion: games where user had a winning advantage (any phase)
         # ----------------------------------------------------------------
         winning_moves = [e for e in user_evals if e.get("eval_before", 0) > 200]
-        had_winning = len(winning_moves) > 0
-
-        if had_winning:
-            m.endgame_winning_total += 1
+        if winning_moves:
             m.winning_games_total += 1
             if result == "win":
-                m.endgame_winning_conversions += 1
                 m.winning_games_converted += 1
             m.blunders_while_winning += sum(
                 1 for e in winning_moves if e.get("classification") == "blunder"
             )
 
         # ----------------------------------------------------------------
-        # Mental stability: blunder clusters (2+ blunders in 3-move window)
+        # Endgame: winning positions specifically in the endgame (move 30+)
         # ----------------------------------------------------------------
-        for i in range(len(user_evals) - 2):
-            window = user_evals[i:i + 3]
+        endgame_winning_moves = [
+            e for e in user_evals
+            if e.get("eval_before", 0) > 200 and e.get("move_number", 0) >= 30
+        ]
+        if endgame_winning_moves:
+            m.endgame_winning_total += 1
+            if result == "win":
+                m.endgame_winning_conversions += 1
+
+        # ----------------------------------------------------------------
+        # Mental stability: blunder clusters (2+ blunders in 3-move window)
+        # Non-overlapping: skip past each detected cluster to avoid double-counting.
+        # ----------------------------------------------------------------
+        ci = 0
+        while ci < len(user_evals) - 2:
+            window = user_evals[ci:ci + 3]
             if sum(1 for e in window if e.get("classification") == "blunder") >= 2:
                 m.blunder_clusters += 1
-                break  # count once per game
+                ci += 3  # jump past this cluster
+            else:
+                ci += 1
 
     # Normalize accumulated sums
     if m.attacking_moves_good > 0:

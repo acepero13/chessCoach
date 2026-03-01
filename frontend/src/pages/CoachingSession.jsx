@@ -223,16 +223,25 @@ export default function CoachingSession() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 text-sm">
-                  <InfoBox label="Your move" value={revealed.explanation ? '' : '—'} />
+                  {/* Student's suggestion (if they typed a legal move) */}
+                  {revealed.student_move ? (
+                    <InfoBox
+                      label="Your suggestion"
+                      value={`${revealed.student_move} (${revealed.student_cp_loss?.toFixed(0) ?? '?'} cp)`}
+                      className={classificationClass(revealed.student_classification)}
+                    />
+                  ) : (
+                    <InfoBox label="Your suggestion" value="—" />
+                  )}
                   <InfoBox
                     label="Best move"
                     value={revealed.engine_best_move}
                     className="text-green-400 font-mono font-bold"
                   />
                   <InfoBox
-                    label="Eval swing"
-                    value={`-${revealed.eval_swing?.toFixed(0)} cp`}
-                    className="text-red-400"
+                    label={`In game (${revealed.game_move ?? '?'})`}
+                    value={`${revealed.eval_swing?.toFixed(0)} cp loss`}
+                    className={classificationClass(revealed.classification)}
                   />
                   <InfoBox
                     label="Classification"
@@ -249,7 +258,7 @@ export default function CoachingSession() {
                 )}
 
                 {revealed.explanation && (
-                  <div className="text-sm text-slate-300 leading-relaxed border-t border-slate-700 pt-3">
+                  <div className="text-sm text-slate-300 leading-relaxed border-t border-slate-700 pt-3 whitespace-pre-wrap">
                     {revealed.explanation}
                   </div>
                 )}
