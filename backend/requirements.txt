@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+aiosqlite==0.20.0
+python-chess==1.999
+httpx==0.28.1
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+stockfish==3.28.0
+ollama==0.4.7
+greenlet==3.3.2

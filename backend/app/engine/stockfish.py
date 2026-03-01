@@ -1,0 +1,195 @@
+"""
+Stockfish 18 wrapper using python-chess async UCI engine interface.
+Uses N+1 position analyses for a game of N moves (one analysis per position,
+reusing evals between consecutive moves).
+"""
+import asyncio
+import chess
+import chess.engine
+import chess.pgn
+import io
+from dataclasses import dataclass
+from typing import Optional
+from app.config import settings
+
+
+@dataclass
+class MoveEval:
+    fen: str
+    move_uci: str
+    move_san: str
+    eval_before: float          # centipawns from mover's perspective before move
+    eval_after: float           # centipawns from mover's perspective after move
+    best_move_uci: str
+    best_move_san: str
+    eval_best: float            # = eval_before (best achievable)
+    centipawn_loss: float       # eval_best - eval_after (always >= 0)
+    classification: str         # best/good/inaccuracy/mistake/blunder
+    is_capture: bool
+    is_check: bool
+    move_number: int
+    color: str                  # "white" or "black"
+
+
+def _pov_cp(score: chess.engine.PovScore, color: chess.Color) -> float:
+    """Return score in centipawns from the given color's perspective."""
+    pov = score.pov(color)
+    if pov.is_mate():
+        return 10000.0 if pov.mate() > 0 else -10000.0
+    return float(pov.score())
+
+
+def classify_move(centipawn_loss: float) -> str:
+    if centipawn_loss < 10:
+        return "best"
+    elif centipawn_loss < 25:
+        return "good"
+    elif centipawn_loss < 60:
+        return "inaccuracy"
+    elif centipawn_loss < 120:
+        return "mistake"
+    else:
+        return "blunder"
+
+
+class StockfishEngine:
+    """
+    Async Stockfish engine wrapper.
+    A single instance should be reused across analyses.
+    All public methods are coroutines and must be called from the same event loop.
+    """
+
+    def __init__(self):
+        self._transport = None
+        self._engine: Optional[chess.engine.UciProtocol] = None
+        self._lock = asyncio.Lock()
+
+    async def start(self):
+        self._transport, self._engine = await chess.engine.popen_uci(settings.stockfish_path)
+        await self._engine.configure({
+            "Threads": settings.stockfish_threads,
+            "Hash": settings.stockfish_hash_mb,
+        })
+
+    async def stop(self):
+        if self._engine:
+            await self._engine.quit()
+            self._engine = None
+            self._transport = None
+
+    @property
+    def is_running(self) -> bool:
+        return self._engine is not None
+
+    async def _analyse(self, board: chess.Board, depth: int) -> chess.engine.InfoDict:
+        """Single position analysis (serialized via lock)."""
+        async with self._lock:
+            return await self._engine.analyse(board, chess.engine.Limit(depth=depth))
+
+    async def analyse_game(self, pgn_text: str, depth: int = None) -> list[MoveEval]:
+        """
+        Analyse every move in a PGN game.
+        Performs N+1 engine calls for N moves by reusing position evals.
+        """
+        depth = depth or settings.analysis_depth
+        game = chess.pgn.read_game(io.StringIO(pgn_text))
+        if not game:
+            return []
+
+        main_line = list(game.mainline_moves())
+        if not main_line:
+            return []
+
+        # Build all N+1 board states
+        boards: list[chess.Board] = []
+        board = game.board()
+        boards.append(board.copy())
+        for move in main_line:
+            board.push(move)
+            boards.append(board.copy())
+
+        # Analyse all positions once — this is the key efficiency win
+        infos: list[chess.engine.InfoDict] = []
+        for b in boards:
+            info = await self._analyse(b, depth)
+            infos.append(info)
+
+        # Build MoveEval entries
+        evaluations: list[MoveEval] = []
+        board = game.board()
+
+        for i, move in enumerate(main_line):
+            color = board.turn                    # color of the player making this move
+            color_str = "white" if color == chess.WHITE else "black"
+            fen_before = boards[i].fen()
+
+            san = boards[i].san(move)
+            is_capture = boards[i].is_capture(move)
+            is_check = boards[i + 1].is_check()
+
+            info_before = infos[i]
+            info_after = infos[i + 1]
+
+            # Best move and its eval (from mover's perspective)
+            best_move_obj = info_before.get("pv", [move])[0]
+            best_move_san = boards[i].san(best_move_obj)
+            eval_best = _pov_cp(info_before["score"], color)
+
+            # Eval of position after actual move, from the original mover's perspective
+            # info_after is from the opponent's (not color) perspective, so negate
+            eval_after = -_pov_cp(info_after["score"], not color)
+
+            centipawn_loss = max(0.0, eval_best - eval_after)
+            classification = classify_move(centipawn_loss)
+
+            evaluations.append(MoveEval(
+                fen=fen_before,
+                move_uci=move.uci(),
+                move_san=san,
+                eval_before=eval_best,
+                eval_after=eval_after,
+                best_move_uci=best_move_obj.uci(),
+                best_move_san=best_move_san,
+                eval_best=eval_best,
+                centipawn_loss=centipawn_loss,
+                classification=classification,
+                is_capture=is_capture,
+                is_check=is_check,
+                move_number=boards[i].fullmove_number,
+                color=color_str,
+            ))
+            board.push(move)
+
+        return evaluations
+
+    async def get_best_move(self, fen: str, depth: int = None) -> dict:
+        """Get best move for a given FEN position."""
+        depth = depth or settings.stockfish_depth
+        board = chess.Board(fen)
+        info = await self._analyse(board, depth)
+        best_move = info["pv"][0] if info.get("pv") else None
+        return {
+            "best_move_uci": best_move.uci() if best_move else None,
+            "best_move_san": board.san(best_move) if best_move else None,
+            "score_cp": _pov_cp(info["score"], board.turn),
+            "pv": [m.uci() for m in info.get("pv", [])[:5]],
+        }
+
+
+# Global singleton
+_engine_instance: Optional[StockfishEngine] = None
+
+
+async def get_engine() -> StockfishEngine:
+    global _engine_instance
+    if _engine_instance is None or not _engine_instance.is_running:
+        _engine_instance = StockfishEngine()
+        await _engine_instance.start()
+    return _engine_instance
+
+
+async def shutdown_engine():
+    global _engine_instance
+    if _engine_instance:
+        await _engine_instance.stop()
+        _engine_instance = None

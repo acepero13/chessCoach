@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  background-color: #1a1a2e;
+  color: #e8e8e8;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.score-high { @apply bg-green-500 text-white; }
+.score-mid  { @apply bg-yellow-500 text-black; }
+.score-low  { @apply bg-red-500 text-white; }
+
+.move-best       { color: #4ade80; }
+.move-good       { color: #86efac; }
+.move-inaccuracy { color: #facc15; }
+.move-mistake    { color: #fb923c; }
+.move-blunder    { color: #ef4444; }

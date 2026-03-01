@@ -1,0 +1,44 @@
+import { useState } from 'react'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import Dashboard from './pages/Dashboard'
+import CoachingSession from './pages/CoachingSession'
+import TrainingPlan from './pages/TrainingPlan'
+
+export default function App() {
+  const [userId, setUserIdState] = useState(() => {
+    const stored = localStorage.getItem('chessTutorUserId')
+    return stored ? Number(stored) : null
+  })
+  const [username, setUsernameState] = useState(
+    () => localStorage.getItem('chessTutorUsername') || ''
+  )
+
+  const setUser = (id, name) => {
+    setUserIdState(id)
+    if (id) localStorage.setItem('chessTutorUserId', String(id))
+    else localStorage.removeItem('chessTutorUserId')
+    if (name) {
+      setUsernameState(name)
+      localStorage.setItem('chessTutorUsername', name)
+    }
+  }
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route
+          path="/"
+          element={<Dashboard userId={userId} username={username} setUser={setUser} />}
+        />
+        <Route
+          path="/coaching/:gameId"
+          element={<CoachingSession />}
+        />
+        <Route
+          path="/training"
+          element={<TrainingPlan userId={userId} />}
+        />
+      </Routes>
+    </BrowserRouter>
+  )
+}
