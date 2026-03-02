@@ -130,3 +130,18 @@ class TrainingPlan(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="training_plans")
+
+
+class AnnotationSession(Base):
+    __tablename__ = "annotation_sessions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=False)
+    time_budget_minutes = Column(Integer, default=30)
+    focused_move_indices = Column(JSON, default=list)   # list[int]: indices into move_evaluations
+    moves_data = Column(JSON, default=list)             # list[dict]: per-move annotation + engine data
+    reflection = Column(JSON)                           # {eval_accuracy, candidate_quality, ...}
+    completed = Column(Boolean, default=False)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime)

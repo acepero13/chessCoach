@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { CheckCircle, Circle, Zap, AlertCircle, Loader2, Clock } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { CheckCircle, Circle, Zap, AlertCircle, Loader2, Clock, BookOpen, PenLine } from 'lucide-react'
 import { analyzeGames, getAnalysisStatus } from '../api/client'
 
 function resultBadge(result) {
@@ -8,11 +9,13 @@ function resultBadge(result) {
 }
 
 export default function GameList({ games, userId, onAnalyzed }) {
+  const navigate = useNavigate()
   const [selected, setSelected] = useState(new Set())
   const [submitting, setSubmitting] = useState(false)
   const [analysisRunning, setAnalysisRunning] = useState(false)
   const [status, setStatus] = useState(null)   // { pending, running, complete, failed, total }
   const [error, setError] = useState(null)
+  const [openDropdown, setOpenDropdown] = useState(null)  // game.id | null
   const pollRef = useRef(null)
 
   // Poll for analysis progress whenever analysis is running
@@ -25,7 +28,6 @@ export default function GameList({ games, userId, onAnalyzed }) {
         const s = res.data
         setStatus(s)
         if (s.running === 0 && s.pending === 0) {
-          // All done
           setAnalysisRunning(false)
           onAnalyzed?.()
           clearInterval(pollRef.current)
@@ -118,7 +120,11 @@ export default function GameList({ games, userId, onAnalyzed }) {
         {games.map(game => (
           <div
             key={game.id}
-            onClick={() => !analysisRunning && toggle(game.id)}
+            onClick={() => {
+              if (analysisRunning) return
+              if (openDropdown === game.id) { setOpenDropdown(null); return }
+              toggle(game.id)
+            }}
             className={`flex items-center gap-3 px-4 py-3 transition-colors ${
               analysisRunning ? 'cursor-default' : 'cursor-pointer'
             } ${selected.has(game.id) ? 'bg-chess-accent/30' : 'hover:bg-slate-800/50'}`}
@@ -146,13 +152,58 @@ export default function GameList({ games, userId, onAnalyzed }) {
               </div>
             </div>
 
-            <div className="flex-shrink-0">
-              {game.has_analysis
-                ? <Zap size={16} className="text-green-400" title="Analyzed" />
-                : analysisRunning
-                  ? <Clock size={16} className="text-slate-500" title="Queued" />
-                  : <AlertCircle size={16} className="text-slate-600" title="Not analyzed" />
-              }
+            {/* Action icon — analyzed games get a dropdown, others get a status icon */}
+            <div
+              className="flex-shrink-0 relative"
+              onClick={e => e.stopPropagation()}
+            >
+              {game.has_analysis ? (
+                <>
+                  <button
+                    onClick={() => setOpenDropdown(openDropdown === game.id ? null : game.id)}
+                    className="p-1 rounded hover:bg-slate-700 transition-colors"
+                    title="Review options"
+                  >
+                    <Zap size={16} className="text-green-400" />
+                  </button>
+
+                  {openDropdown === game.id && (
+                    <>
+                      {/* Backdrop to close on outside click */}
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setOpenDropdown(null)}
+                      />
+                      <div className="absolute right-0 top-8 z-50 bg-slate-800 border border-slate-600 rounded-lg shadow-xl w-48 overflow-hidden">
+                        <button
+                          onClick={() => {
+                            setOpenDropdown(null)
+                            navigate(`/coaching/${game.id}`, { state: { userId } })
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-left"
+                        >
+                          <BookOpen size={14} className="text-chess-gold flex-shrink-0" />
+                          Analyse with Coach
+                        </button>
+                        <button
+                          onClick={() => {
+                            setOpenDropdown(null)
+                            navigate(`/self-analysis/${game.id}`)
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-left"
+                        >
+                          <PenLine size={14} className="text-chess-gold flex-shrink-0" />
+                          Self-Analysis
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : analysisRunning ? (
+                <Clock size={16} className="text-slate-500" title="Queued" />
+              ) : (
+                <AlertCircle size={16} className="text-slate-600" title="Not analyzed" />
+              )}
             </div>
           </div>
         ))}

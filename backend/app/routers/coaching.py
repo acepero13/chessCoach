@@ -10,7 +10,7 @@ from typing import Optional
 
 from app.database import get_db
 from app.models import Game, GameAnalysis, CoachingSession, PerformanceProfile
-from app.llm.explainer import explain_mistake, generate_position_question
+from app.llm.explainer import explain_mistake, generate_position_question, generate_session_summary
 from app.engine.stockfish import get_engine
 from app.patterns.tactical_detectors import _is_hanging
 
@@ -98,6 +98,40 @@ async def start_coaching_session(
     if not critical_indices:
         return {"message": "No critical moves found in this game", "session_id": None}
 
+    # Build session summary from aggregated game data
+    critical_evals = [evals[i] for i in critical_indices]
+    total_mistakes = sum(1 for e in critical_evals if e["classification"] == "mistake")
+    total_blunders = sum(1 for e in critical_evals if e["classification"] == "blunder")
+    worst_move = max(critical_evals, key=lambda e: e.get("centipawn_loss", 0), default=None)
+    worst_move_summary = (
+        {
+            "move_san": worst_move["move_san"],
+            "centipawn_loss": worst_move["centipawn_loss"],
+            "classification": worst_move["classification"],
+        }
+        if worst_move else None
+    )
+    # Collect top pattern types from this game
+    all_patterns = analysis.patterns_detected or []
+    user_pattern_types = [
+        p["type"] for p in all_patterns if p.get("color") == user_color
+    ]
+    pattern_counts: dict[str, int] = {}
+    for pt in user_pattern_types:
+        pattern_counts[pt] = pattern_counts.get(pt, 0) + 1
+    top_patterns = [pt for pt, _ in sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True)[:3]]
+
+    opponent = game.black_player if user_color == "white" else game.white_player
+    session_summary = await generate_session_summary(
+        user_color=user_color,
+        opponent=opponent or "opponent",
+        result=game.result or "unknown",
+        total_mistakes=total_mistakes,
+        total_blunders=total_blunders,
+        top_pattern_types=top_patterns,
+        worst_move=worst_move_summary,
+    )
+
     # Create session
     session = CoachingSession(
         user_id=req.user_id,
@@ -131,6 +165,7 @@ async def start_coaching_session(
 
     return {
         "session_id": session.id,
+        "session_summary": session_summary,
         "total_critical_moves": len(critical_indices),
         "current_position": {
             "fen": move_eval["fen"],
@@ -237,7 +272,7 @@ async def submit_answer(
         student_cp_loss = eval_result["centipawn_loss"]
         student_classification = eval_result["classification"]
 
-    # Generate explanation comparing student's suggestion, game move, and engine best
+    # Generate explanation — includes LLM assessment of user's written reasoning
     explanation = await explain_mistake(
         move_san=move_eval["move_san"],
         best_move_san=move_eval["best_move_san"],
@@ -250,6 +285,7 @@ async def submit_answer(
         student_move_san=student_move_san,
         student_cp_loss=student_cp_loss,
         student_classification=student_classification,
+        user_answer_text=req.user_answer,
     )
 
     # Save interaction
@@ -311,6 +347,8 @@ async def submit_answer(
 
     return {
         "explanation": explanation,
+        # User's original written answer (for display in the reveal panel)
+        "user_answer_text": req.user_answer,
         # Game move (what was actually played)
         "game_move": move_eval["move_san"],
         "eval_swing": move_eval["centipawn_loss"],

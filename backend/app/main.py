@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
 from app.engine.stockfish import get_engine, shutdown_engine
-from app.routers import games, profile, coaching, training
+from app.routers import games, profile, coaching, training, selfanalysis
 
 
 @asynccontextmanager
@@ -41,6 +41,7 @@ app.include_router(games.router)
 app.include_router(profile.router)
 app.include_router(coaching.router)
 app.include_router(training.router)
+app.include_router(selfanalysis.router)
 
 
 @app.get("/health")

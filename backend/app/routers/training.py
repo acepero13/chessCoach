@@ -38,7 +38,7 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
         "mental_stability_score": profile.mental_stability_score,
     }
 
-    plan = generate_training_plan(profile_dict)
+    plan = generate_training_plan(profile_dict, raw_metrics=profile.raw_metrics or {})
     plan_dict = plan_to_dict(plan)
 
     # Save plan

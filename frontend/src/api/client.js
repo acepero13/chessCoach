@@ -59,3 +59,25 @@ export const getLatestPlan = (userId) =>
 
 export const getPerformanceSummary = (userId) =>
   api.post(`/training/${userId}/summary`)
+
+// Self-Analysis (Guided Annotation)
+export const startAnnotationSession = (userId, gameId, timeBudget) =>
+  api.post('/selfanalysis/start', { user_id: userId, game_id: gameId, time_budget_minutes: timeBudget })
+
+export const submitAnnotation = (sessionId, payload) =>
+  api.post(`/selfanalysis/session/${sessionId}/annotate`, payload)
+
+export const completeAnnotationSession = (sessionId) =>
+  api.post(`/selfanalysis/session/${sessionId}/complete`)
+
+export const getAnnotationSession = (sessionId) =>
+  api.get(`/selfanalysis/session/${sessionId}`)
+
+export const getLatestSessionForGame = (gameId) =>
+  api.get(`/selfanalysis/game/${gameId}/latest-session`)
+
+export const getCoachReview = (sessionId) =>
+  api.get(`/selfanalysis/session/${sessionId}/coach-review`)
+
+export const submitCoachReviewReply = (sessionId, payload) =>
+  api.post(`/selfanalysis/session/${sessionId}/coach-review/reply`, payload)

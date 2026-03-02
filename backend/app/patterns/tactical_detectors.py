@@ -21,6 +21,12 @@ import chess
 from dataclasses import dataclass
 from app.engine.stockfish import MoveEval
 
+# Piece values for capture-profitability checks (centipawn-like units)
+PIECE_VALUES = {
+    chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
+    chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 100,
+}
+
 
 @dataclass
 class Pattern:
@@ -38,25 +44,48 @@ class Pattern:
 # ---------------------------------------------------------------------------
 
 def _is_hanging(board: chess.Board, square: chess.Square) -> bool:
-    """Return True if piece on square is undefended or attacked more than defended."""
+    """
+    Return True if piece on square can be captured profitably.
+    Checks whether the cheapest attacker is worth less than the target piece,
+    or the piece is completely undefended. Count-only comparisons (attackers >= defenders)
+    are insufficient because they ignore piece values.
+    """
     piece = board.piece_at(square)
     if piece is None:
         return False
     attackers = board.attackers(not piece.color, square)
+    if len(attackers) == 0:
+        return False
     defenders = board.attackers(piece.color, square)
-    return len(attackers) > 0 and len(attackers) >= len(defenders)
+    if len(defenders) == 0:
+        return True  # undefended and attacked — always hanging
+    # Hanging if the cheapest attacker is less valuable than the target piece
+    piece_val = PIECE_VALUES.get(piece.piece_type, 0)
+    min_attacker_val = min(
+        PIECE_VALUES.get(board.piece_at(sq).piece_type, 100)
+        for sq in attackers
+        if board.piece_at(sq) is not None
+    )
+    return min_attacker_val < piece_val
 
 
 def _move_creates_fork(board: chess.Board, move: chess.Move) -> bool:
     """
-    Return True if `move` creates a fork: after the move, the moving piece
-    attacks 2 or more valuable opponent pieces (queen, rook, bishop, knight).
+    Return True if `move` creates a genuine fork: after the move, the landing
+    piece attacks 2 or more opponent valuable pieces that can be captured
+    profitably (target worth >= attacker, or target is hanging).
+    Merely attacking defended pieces of equal or lesser value is not a fork.
     """
     color = board.turn
     test = board.copy()
     test.push(move)
     landing = move.to_square
-    attacked_valuable = 0
+    landing_piece = test.piece_at(landing)
+    if landing_piece is None:
+        return False
+    landing_val = PIECE_VALUES.get(landing_piece.piece_type, 0)
+
+    profitable_attacks = 0
     for sq in chess.SQUARES:
         piece = test.piece_at(sq)
         if (
@@ -65,23 +94,33 @@ def _move_creates_fork(board: chess.Board, move: chess.Move) -> bool:
             and piece.piece_type in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
             and test.is_attacked_by(color, sq)
         ):
-            attacked_valuable += 1
-    return attacked_valuable >= 2
+            target_val = PIECE_VALUES.get(piece.piece_type, 0)
+            # Count only if capture would be profitable OR target is hanging
+            if target_val >= landing_val or _is_hanging(test, sq):
+                profitable_attacks += 1
+
+    return profitable_attacks >= 2
 
 
 def _move_creates_pin(board: chess.Board, move: chess.Move) -> bool:
     """
-    Return True if `move` creates a pin: after the move, at least one
-    opponent piece is pinned (shields king or a more valuable piece).
+    Return True if `move` creates a meaningful pin: after the move, an opponent
+    piece of at least knight value is absolutely pinned to its king.
+    Pinned pawns are ignored because pinning a pawn is common and rarely decisive.
+    python-chess is_pinned() checks absolute pins (to king) only.
     """
     color = board.turn
     test = board.copy()
     test.push(move)
     for sq in chess.SQUARES:
         piece = test.piece_at(sq)
-        if piece and piece.color != color:
-            if test.is_pinned(not color, sq):
-                return True
+        if (
+            piece
+            and piece.color != color
+            and piece.piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN)
+            and test.is_pinned(not color, sq)
+        ):
+            return True
     return False
 
 

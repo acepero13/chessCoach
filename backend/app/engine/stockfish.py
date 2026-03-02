@@ -39,6 +39,19 @@ def _pov_cp(score: chess.engine.PovScore, color: chess.Color) -> float:
     return float(pov.score())
 
 
+def _pv_uci_to_san_board(board: chess.Board, pv: list[chess.Move]) -> list[str]:
+    """Convert a list of chess.Move objects to SAN notation from the given board state."""
+    b = board.copy()
+    san_moves = []
+    for move in pv:
+        try:
+            san_moves.append(b.san(move))
+            b.push(move)
+        except Exception:
+            break
+    return san_moves
+
+
 def classify_move(centipawn_loss: float) -> str:
     if centipawn_loss < 10:
         return "best"
@@ -204,6 +217,35 @@ class StockfishEngine:
             "score_cp": _pov_cp(info["score"], board.turn),
             "pv": [m.uci() for m in info.get("pv", [])[:5]],
         }
+
+    async def get_multipv(self, fen: str, num_pv: int = 4, depth: int = None) -> list[dict]:
+        """
+        Get top N principal variations for a position (used for critical moves).
+        Returns list of {rank, move_san, score_cp, pv_san} dicts.
+        """
+        depth = depth or 25
+        board = chess.Board(fen)
+        async with self._lock:
+            results = await self._engine.analyse(
+                board, chess.engine.Limit(depth=depth), multipv=num_pv
+            )
+        if isinstance(results, dict):
+            results = [results]
+
+        lines = []
+        for i, info in enumerate(results):
+            pv = info.get("pv", [])
+            if not pv:
+                continue
+            best = pv[0]
+            pv_san = _pv_uci_to_san_board(board, pv[:5])
+            lines.append({
+                "rank": i + 1,
+                "move_san": board.san(best),
+                "score_cp": _pov_cp(info["score"], board.turn),
+                "pv_san": pv_san,
+            })
+        return lines
 
 
 # Global singleton

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import CoachingSession from './pages/CoachingSession'
 import TrainingPlan from './pages/TrainingPlan'
+import SelfAnalysis from './pages/SelfAnalysis'
 
 export default function App() {
   const [userId, setUserIdState] = useState(() => {
@@ -37,6 +38,10 @@ export default function App() {
         <Route
           path="/training"
           element={<TrainingPlan userId={userId} />}
+        />
+        <Route
+          path="/self-analysis/:gameId"
+          element={<SelfAnalysis userId={userId} />}
         />
       </Routes>
     </BrowserRouter>

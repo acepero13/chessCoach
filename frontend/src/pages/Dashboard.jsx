@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, Target, Calendar, RefreshCw, ChevronRight } from 'lucide-react'
+import { BookOpen, Target, Calendar, RefreshCw, ChevronRight, PenLine } from 'lucide-react'
 import ScoreRadar from '../components/ScoreRadar'
 import GameImport from '../components/GameImport'
 import GameList from '../components/GameList'
@@ -64,6 +64,18 @@ export default function Dashboard({ userId, username, setUser }) {
     }
   }
 
+  const handleStartSelfAnalysis = async () => {
+    try {
+      const res = await selectGames(userId)
+      const firstGame = res.data.selected_games?.[0]
+      if (firstGame) {
+        navigate(`/self-analysis/${firstGame.game_id}`)
+      }
+    } catch (e) {
+      alert('Run analysis first to get game recommendations.')
+    }
+  }
+
   const scores = profile
     ? {
         attack: profile.attack_score,
@@ -106,12 +118,18 @@ export default function Dashboard({ userId, username, setUser }) {
 
         {/* Action cards (only when profile exists) */}
         {profile && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <ActionCard
               icon={<BookOpen size={20} />}
               title="Start Coaching Session"
               description="Review your most instructive games interactively"
               onClick={handleStartCoaching}
+            />
+            <ActionCard
+              icon={<PenLine size={20} />}
+              title="Self-Analysis"
+              description="Annotate your own moves before the engine reveals"
+              onClick={handleStartSelfAnalysis}
             />
             <ActionCard
               icon={<Calendar size={20} />}

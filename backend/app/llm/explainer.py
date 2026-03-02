@@ -47,14 +47,15 @@ async def explain_mistake(
     student_move_san: str = "",
     student_cp_loss: float | None = None,
     student_classification: str = "",
+    user_answer_text: str = "",
 ) -> str:
     """
     Build a coaching explanation where all chess facts are deterministic (Python-computed)
-    and the LLM only adds a brief conceptual note — it never touches the position or PV.
+    and the LLM evaluates the user's reasoning and adds a conceptual note.
     """
     parts = []
 
-    # --- Section 1: Student's suggestion vs game move ---
+    # --- Section 1: Student's suggested move vs game move ---
     if student_move_san and student_move_san != move_san:
         if student_cp_loss is not None:
             if student_cp_loss < centipawn_loss - 10:
@@ -81,26 +82,43 @@ async def explain_mistake(
         f"a {classification} ({centipawn_loss:.0f} cp loss)."
     )
 
-    # --- Section 3: Engine recommendation (all facts from Python, not LLM) ---
+    # --- Section 3: Engine recommendation (all facts, not LLM) ---
     if engine_pv_san:
         parts.append(f"Engine best line — {' '.join(engine_pv_san)}")
     else:
         parts.append(f"Engine best move — {best_move_san}")
 
-    # --- Section 4: LLM adds ONE short conceptual note only ---
-    # The LLM is NOT given the FEN and is NOT asked to explain the position.
-    # It only gets the move names and PV so it can comment on the chess idea abstractly.
+    # --- Section 4: LLM evaluates the user's written reasoning ---
+    # If user wrote reasoning text, the LLM assesses whether their thinking is
+    # correct/reveals a misconception, then states the key chess idea.
+    # If no text was written, falls back to one-sentence key idea only.
     pv_str = " ".join(engine_pv_san[:5]) if engine_pv_san else best_move_san
-    concept_prompt = (
-        f"A chess player played {move_san} (a {classification}, {centipawn_loss:.0f} cp loss). "
-        f"The engine recommends {best_move_san} with the continuation: {pv_str}. "
-        f"In exactly ONE sentence, state what chess idea {best_move_san} embodies "
-        f"(e.g. development, piece activity, king safety, initiative, coordination). "
-        f"Do NOT invent moves. Do NOT mention specific squares beyond those already listed."
-    )
+    answer_excerpt = (user_answer_text or "").strip()[:300]
+
+    if answer_excerpt:
+        concept_prompt = (
+            f"A chess player was asked what they would play. They wrote: \"{answer_excerpt}\". "
+            f"They played {move_san} in the game (a {classification}, {centipawn_loss:.0f} cp loss). "
+            f"The engine recommends {best_move_san}: {pv_str}. "
+            f"In 2-3 short sentences: "
+            f"(1) assess whether their reasoning shows correct understanding or reveals a specific misconception or knowledge gap — be direct; "
+            f"(2) state what chess idea {best_move_san} embodies. "
+            f"Do NOT invent moves. Do NOT mention specific squares beyond those already listed."
+        )
+        label = "Assessment"
+    else:
+        concept_prompt = (
+            f"A chess player played {move_san} (a {classification}, {centipawn_loss:.0f} cp loss). "
+            f"The engine recommends {best_move_san}: {pv_str}. "
+            f"In ONE sentence, state what chess idea {best_move_san} embodies "
+            f"(e.g. development, piece activity, king safety, initiative, coordination). "
+            f"Do NOT invent moves. Do NOT mention specific squares beyond those already listed."
+        )
+        label = "Key idea"
+
     concept = await _call_ollama(concept_prompt)
     if concept:
-        parts.append(f"Key idea — {concept}")
+        parts.append(f"{label} — {concept}")
 
     return "\n\n".join(parts)
 
@@ -170,6 +188,238 @@ async def generate_position_question(
         "question": question,
         "hint": hint,
     }
+
+
+async def explain_annotation(
+    move_san: str,
+    best_move_san: str,
+    centipawn_loss: float,
+    classification: str,
+    user_annotation: str,
+    user_eval_label: str,
+    eval_verdict: str,          # deterministic verdict computed by router
+    user_candidates: list[str],
+    engine_pv_san: list[str],
+    patterns: list[dict],
+) -> str:
+    """
+    Build a self-annotation explanation. All chess facts are deterministic;
+    LLM adds only one conceptual contrast sentence.
+    """
+    parts = []
+
+    # --- Section 1: Was user's eval label correct? (deterministic) ---
+    parts.append(f"Your position assessment ({user_eval_label}): {eval_verdict}.")
+
+    # --- Section 2: Candidate move quality (deterministic) ---
+    if user_candidates:
+        candidates_str = ", ".join(c for c in user_candidates if c)
+        if candidates_str:
+            if best_move_san in user_candidates:
+                parts.append(f"Candidates considered ({candidates_str}): the engine's best move was among them.")
+            else:
+                parts.append(f"Candidates considered ({candidates_str}): the engine's best move ({best_move_san}) was not in your list.")
+
+    # --- Section 3: Engine best line (deterministic) ---
+    if engine_pv_san:
+        parts.append(f"Engine best line — {' '.join(engine_pv_san)}")
+    else:
+        parts.append(f"Engine best move — {best_move_san}")
+
+    # --- Section 4: Detected patterns (deterministic) ---
+    if patterns:
+        pattern_names = ", ".join(p["type"].replace("_", " ") for p in patterns[:3])
+        parts.append(f"Pattern(s) detected — {pattern_names}.")
+
+    # --- Section 5: LLM conceptual contrast (one sentence only) ---
+    annotation_excerpt = (user_annotation or "")[:200]
+    pv_str = " ".join(engine_pv_san[:3]) if engine_pv_san else best_move_san
+    concept_prompt = (
+        f"A chess player played {move_san} ({classification}, {centipawn_loss:.0f} cp loss) "
+        f"and explained: \"{annotation_excerpt}\". "
+        f"The engine recommends {best_move_san} with the line: {pv_str}. "
+        f"In ONE sentence, contrast the chess idea behind the player's move vs the engine's recommendation. "
+        f"Do NOT invent moves or mention specific squares beyond those already listed."
+    )
+    concept = await _call_ollama(concept_prompt)
+    if concept:
+        parts.append(f"Key idea — {concept}")
+
+    return "\n\n".join(parts)
+
+
+async def generate_review_comment(
+    move_san: str,
+    classification: str,
+    centipawn_loss: float,
+    user_annotation: str,
+    user_eval_label: str,
+    eval_verdict: str,      # "correct" | "slightly off" | "significantly off" | ...
+    engine_best_move: str,
+    engine_pv_san: list[str],
+    best_in_candidates: bool,
+    patterns: list[dict],
+) -> str:
+    """
+    Generate a targeted coaching comment for a self-annotated move.
+    LLM is skipped for straightforward correct moves to keep review fast.
+    Returns a coaching question for wrong thinking or a deeper insight for correct moves.
+    """
+    annotation_text = (user_annotation or "").strip()[:300]
+    pv_str = " ".join(engine_pv_san[:4]) if engine_pv_san else engine_best_move
+    patterns_text = ", ".join(p["type"].replace("_", " ") for p in patterns[:2]) if patterns else ""
+    is_critical = classification in ("mistake", "blunder")
+    eval_correct = eval_verdict in ("correct", "slightly off")
+
+    # Skip LLM for well-annotated moves with correct evaluation — give a short positive note
+    if not is_critical and eval_correct and best_in_candidates and annotation_text:
+        comment = await _call_ollama(
+            f"Chess player handled move {move_san} correctly: assessed position as {user_eval_label} ({eval_verdict}), "
+            f"included {engine_best_move} in candidates. They wrote: \"{annotation_text[:200]}\". "
+            f"Engine: {engine_best_move}: {pv_str}. "
+            f"In 1-2 sentences, confirm what they understood correctly and add one chess principle."
+        )
+        return comment or f"Correct evaluation and candidate selection. Engine's {engine_best_move} ({pv_str}) reflects good positional understanding."
+
+    # For critical moves or wrong evaluations, generate targeted coaching
+    eval_off = not eval_correct and user_eval_label
+    candidates_missed = not best_in_candidates and engine_best_move
+
+    if annotation_text:
+        if is_critical and eval_off:
+            instruction = (
+                "Ask a Socratic question (1-2 sentences) that guides the player to see "
+                "why their move failed AND why they misjudged the position. "
+                "Point to the specific gap using the engine line."
+            )
+        elif is_critical:
+            instruction = (
+                "State the chess principle this position illustrates and explain in 1-2 sentences "
+                "what the engine's continuation achieves that the played move missed."
+            )
+        elif eval_off:
+            instruction = (
+                "Ask a targeted question (1-2 sentences) about why the position may be "
+                "different from what they assessed, using the engine recommendation as a clue."
+            )
+        elif candidates_missed:
+            instruction = (
+                "The player's evaluation was correct but they missed the engine's best move. "
+                "In 1-2 sentences, ask what other moves they could have considered and why "
+                f"{engine_best_move} is stronger."
+            )
+        else:
+            instruction = "Confirm their reasoning in 1-2 sentences and add one deeper chess insight."
+
+        prompt = (
+            f"Chess position: {move_san} was played ({classification}, {centipawn_loss:.0f} cp loss). "
+            f"Engine best: {engine_best_move}: {pv_str}. "
+            f"Player's eval: {user_eval_label} (verdict: {eval_verdict}). "
+            f"Player wrote: \"{annotation_text}\". "
+            + (f"Patterns: {patterns_text}. " if patterns_text else "")
+            + instruction
+            + " Do NOT mention squares beyond those listed. Do NOT invent moves."
+        )
+    else:
+        # No annotation — prompt them to think about the position
+        prompt = (
+            f"Chess: {move_san} was played ({classification}, {centipawn_loss:.0f} cp loss) without explanation. "
+            f"Engine best: {engine_best_move}: {pv_str}. "
+            + (f"Pattern: {patterns_text}. " if patterns_text else "")
+            + "Ask one concise Socratic question to help the player understand what they missed. "
+            "Do NOT mention squares beyond those listed."
+        )
+
+    comment = await _call_ollama(prompt)
+    if comment:
+        return comment
+
+    # Deterministic fallback
+    if is_critical:
+        return f"{move_san} was a {classification} ({centipawn_loss:.0f} cp loss). Engine recommends {engine_best_move}: {pv_str}."
+    elif eval_off:
+        return f"Your assessment ({user_eval_label}) was {eval_verdict}. Consider how {engine_best_move} changes the picture: {pv_str}."
+    return f"Engine's best here was {engine_best_move}: {pv_str}."
+
+
+async def generate_review_reply(
+    move_san: str,
+    engine_best_move: str,
+    engine_pv_san: list[str],
+    coach_comment: str,
+    user_response: str,
+) -> str:
+    """
+    Generate a coach reply to the player's response during coach review.
+    Acknowledges correct parts, corrects remaining gaps, closes with key principle.
+    """
+    pv_str = " ".join(engine_pv_san[:4]) if engine_pv_san else engine_best_move
+    prompt = (
+        f"Chess coach commented on move {move_san} (engine best: {engine_best_move}: {pv_str}). "
+        f"Coach said: \"{coach_comment[:250]}\". "
+        f"Player replied: \"{user_response[:300]}\". "
+        f"Write a coaching reply in 2-3 sentences: "
+        f"(1) acknowledge what is correct in their reply; "
+        f"(2) correct any remaining gap or confirm full understanding; "
+        f"(3) close with the key chess principle from this position. "
+        f"Do NOT invent moves or squares beyond those already listed."
+    )
+    reply = await _call_ollama(prompt)
+    if reply:
+        return reply
+    pv_short = " ".join(engine_pv_san[:3]) if engine_pv_san else engine_best_move
+    return (
+        f"Good thinking. The key insight is that {engine_best_move} ({pv_short}) "
+        "addresses the critical factors in the position."
+    )
+
+
+async def generate_session_summary(
+    user_color: str,
+    opponent: str,
+    result: str,
+    total_mistakes: int,
+    total_blunders: int,
+    top_pattern_types: list[str],
+    worst_move: dict | None,  # {move_san, centipawn_loss, classification}
+) -> str:
+    """
+    Generate a short coaching summary shown at the top of the session.
+    Describes what went wrong in the game and sets focus for the review.
+    Falls back to a deterministic string if Ollama is unavailable.
+    """
+    patterns_text = (
+        ", ".join(t.replace("_", " ") for t in top_pattern_types[:3])
+        if top_pattern_types else "general errors"
+    )
+    worst_text = (
+        f"The worst error was {worst_move['move_san']} "
+        f"({worst_move['centipawn_loss']:.0f} cp loss, {worst_move['classification']})."
+        if worst_move else ""
+    )
+
+    prompt = (
+        f"A chess player playing as {user_color} against {opponent}. Result: {result}. "
+        f"They made {total_mistakes} mistake(s) and {total_blunders} blunder(s). "
+        f"Most frequent issues: {patterns_text}. "
+        f"{worst_text} "
+        f"Write exactly 2 sentences: "
+        f"(1) what the main problem was in this game; "
+        f"(2) what the player should focus on during this review. "
+        f"Be specific and direct. Do not mention specific squares or invent moves."
+    )
+
+    result_text = await _call_ollama(prompt)
+    if result_text:
+        return result_text
+
+    # Deterministic fallback
+    error_summary = f"{total_mistakes} mistake(s) and {total_blunders} blunder(s)"
+    return (
+        f"In this game as {user_color}, you made {error_summary}. "
+        f"Main themes: {patterns_text}. "
+        f"Let's work through each critical position."
+    )
 
 
 async def generate_batch_summary(

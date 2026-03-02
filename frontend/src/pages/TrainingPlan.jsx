@@ -1,38 +1,47 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, Dumbbell, Clock, Target, BookOpen, Swords } from 'lucide-react'
+import {
+  ChevronLeft, Dumbbell, Clock, Target, BookOpen, Swords, Brain, Trophy, Zap,
+} from 'lucide-react'
 import { generatePlan, getLatestPlan, getPerformanceSummary } from '../api/client'
 
 const DAY_NAMES = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-function WeekCard({ week }) {
-  const [open, setOpen] = useState(week.week_number === 1)
+const CATEGORY_STYLE = {
+  tactics:  { color: 'text-chess-gold',  bg: 'bg-yellow-900/30 border-yellow-700/40',  Icon: Target   },
+  strategy: { color: 'text-purple-400',  bg: 'bg-purple-900/30 border-purple-700/40',  Icon: Brain    },
+  endgame:  { color: 'text-blue-400',    bg: 'bg-blue-900/30   border-blue-700/40',    Icon: Swords   },
+  opening:  { color: 'text-teal-400',    bg: 'bg-teal-900/30   border-teal-700/40',    Icon: BookOpen },
+  games:    { color: 'text-green-400',   bg: 'bg-green-900/30  border-green-700/40',   Icon: Trophy   },
+  review:   { color: 'text-orange-400',  bg: 'bg-orange-900/30 border-orange-700/40',  Icon: Zap      },
+}
+
+function TaskCard({ task }) {
+  const style = CATEGORY_STYLE[task.category] || CATEGORY_STYLE.tactics
+  const { Icon } = style
 
   return (
-    <div className="bg-chess-panel rounded-xl overflow-hidden">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between p-4 hover:bg-chess-accent/20 transition-colors"
-      >
-        <div className="text-left">
-          <div className="text-chess-gold font-bold">Week {week.week_number}</div>
-          <div className="text-sm text-slate-400">{week.theme}</div>
-        </div>
-        <div className="text-right">
-          <div className="text-sm text-slate-300">{Math.round(week.total_minutes / 60 * 10) / 10}h total</div>
-          <div className="text-xs text-slate-500">{week.recommended_time_control}</div>
-        </div>
-      </button>
-
-      {open && (
-        <div className="border-t border-slate-700">
-          <div className="grid grid-cols-7 divide-x divide-slate-800">
-            {week.daily_sessions.map(session => (
-              <DayColumn key={session.day} session={session} />
-            ))}
+    <div className={`rounded-lg border p-3 ${style.bg}`}>
+      <div className="flex items-start gap-2">
+        <Icon size={13} className={`${style.color} mt-0.5 flex-shrink-0`} />
+        <div className="flex-1 min-w-0">
+          {/* Label with duration inline */}
+          <div className={`text-sm font-semibold leading-snug ${style.color}`}>
+            {task.duration_min > 0 && (
+              <span className="font-mono text-xs font-normal opacity-60 mr-1.5">
+                {task.duration_min} min ·
+              </span>
+            )}
+            {task.label}
           </div>
+          {/* Instructions always visible */}
+          {task.instructions && (
+            <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+              {task.instructions}
+            </p>
+          )}
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -40,30 +49,18 @@ function WeekCard({ week }) {
 function DayColumn({ session }) {
   const isRest = session.estimated_minutes === 0
   return (
-    <div className={`p-2 min-h-32 ${isRest ? 'bg-slate-900/40' : ''}`}>
+    <div className={`p-2 min-h-36 ${isRest ? 'bg-slate-900/40' : ''}`}>
       <div className="text-xs text-slate-500 font-medium mb-2 text-center">
         {DAY_NAMES[session.day]}
       </div>
       {isRest ? (
-        <div className="text-xs text-slate-600 text-center">Rest</div>
+        <div className="text-xs text-slate-600 text-center mt-4">Rest</div>
       ) : (
         <div className="space-y-1.5">
-          {session.tactics_puzzles > 0 && (
-            <Pill icon={<Target size={10} />} text={`${session.tactics_puzzles} puzzles`} color="text-chess-gold" />
-          )}
-          {session.endgame_drills && (
-            <Pill icon={<Swords size={10} />} text="Endgame" color="text-blue-400" />
-          )}
-          {session.opening_review && (
-            <Pill icon={<BookOpen size={10} />} text="Opening" color="text-purple-400" />
-          )}
-          {session.rated_games > 0 && (
-            <Pill icon={<Target size={10} />} text={`${session.rated_games} games`} color="text-green-400" />
-          )}
-          {session.self_review && (
-            <Pill icon={<BookOpen size={10} />} text="Review" color="text-orange-400" />
-          )}
-          <div className="flex items-center gap-1 mt-1">
+          {(session.tasks || []).map((task, i) => (
+            <TaskPill key={i} task={task} />
+          ))}
+          <div className="flex items-center gap-1 mt-1.5">
             <Clock size={8} className="text-slate-600" />
             <span className="text-slate-600 text-xs">{session.estimated_minutes}m</span>
           </div>
@@ -73,11 +70,80 @@ function DayColumn({ session }) {
   )
 }
 
-function Pill({ icon, text, color }) {
+// Compact pill for the weekly calendar grid
+function TaskPill({ task }) {
+  const style = CATEGORY_STYLE[task.category] || CATEGORY_STYLE.tactics
+  const { Icon } = style
   return (
-    <div className={`flex items-center gap-1 ${color}`}>
-      {icon}
-      <span className="text-xs">{text}</span>
+    <div className={`flex items-center gap-1 ${style.color}`}>
+      <Icon size={9} className="flex-shrink-0" />
+      <span className="text-xs leading-tight truncate" title={task.label}>
+        {task.duration_min > 0 ? `${task.duration_min}m` : ''} {task.label.split(' — ')[0].split(' (')[0]}
+      </span>
+    </div>
+  )
+}
+
+function WeekCard({ week }) {
+  const [open, setOpen] = useState(week.week_number === 1)
+  const [dayDetail, setDayDetail] = useState(null)  // day number for expanded detail
+
+  return (
+    <div className="bg-chess-panel rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between p-4 hover:bg-chess-accent/20 transition-colors"
+      >
+        <div className="text-left">
+          <div className="text-chess-gold font-bold">Week {week.week_number}</div>
+          <div className="text-sm text-slate-300">{week.theme}</div>
+          {week.subtitle && (
+            <div className="text-xs text-slate-500 mt-0.5">{week.subtitle}</div>
+          )}
+        </div>
+        <div className="text-right flex-shrink-0 ml-4">
+          <div className="text-sm text-slate-300">{Math.round(week.total_minutes / 60 * 10) / 10}h total</div>
+          <div className="text-xs text-slate-500">{week.recommended_time_control}</div>
+        </div>
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-700">
+          {/* Compact calendar grid */}
+          <div className="grid grid-cols-7 divide-x divide-slate-800 border-b border-slate-700">
+            {week.daily_sessions.map(session => (
+              <button
+                key={session.day}
+                onClick={() => setDayDetail(d => d === session.day ? null : session.day)}
+                className={`text-left transition-colors ${
+                  dayDetail === session.day ? 'bg-chess-accent/30' : 'hover:bg-chess-accent/10'
+                }`}
+              >
+                <DayColumn session={session} />
+              </button>
+            ))}
+          </div>
+
+          {/* Expanded day detail */}
+          {dayDetail !== null && (() => {
+            const session = week.daily_sessions.find(s => s.day === dayDetail)
+            if (!session || !session.tasks?.length) return null
+            return (
+              <div className="p-4 bg-chess-dark/40">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-sm font-semibold text-white">{DAY_NAMES[dayDetail]} — Full Plan</span>
+                  <span className="text-xs text-slate-500">{session.estimated_minutes} min total</span>
+                </div>
+                <div className="space-y-2">
+                  {session.tasks.map((task, i) => (
+                    <TaskCard key={i} task={task} />
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      )}
     </div>
   )
 }

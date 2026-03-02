@@ -10,7 +10,7 @@ Design principles:
 - Neutral (50) is returned only when there is genuinely no data.
 
 Strategy sub-scores (K/M/S/P/BvN):
-  K — King safety  : user blunder rate + castling timing
+  K — King safety  : early castling timing (structural king shelter indicator)
   M — Material     : user-only avg centipawn loss (win-probability formula)
   S — Space        : strategic positional drift per game
   P — Pawn struct  : doubled/isolated pawns + weak squares created
@@ -38,6 +38,25 @@ def _move_accuracy(eval_before: float, eval_after: float) -> float:
     return max(0.0, 103.1668 * math.exp(-0.04354 * wp_loss) - 3.1669)
 
 
+def _is_endgame_from_fen(fen: str) -> bool:
+    """
+    Detect endgame by material, not move number.
+    Counts pieces from the FEN position string — no chess library needed.
+    Endgame: no queens remain, or at most 1 queen with very few pieces.
+    More reliable than move_num >= 30 (some games enter endgame by move 20,
+    others still have heavy pieces at move 40).
+    """
+    if not fen:
+        return False
+    pos = fen.split()[0]   # only the piece-placement field
+    queens  = pos.count('Q') + pos.count('q')
+    rooks   = pos.count('R') + pos.count('r')
+    bishops = pos.count('B') + pos.count('b')
+    knights = pos.count('N') + pos.count('n')
+    major_minor = rooks + bishops + knights
+    return queens == 0 or (queens == 1 and major_minor <= 4) or major_minor <= 3
+
+
 # ---------------------------------------------------------------------------
 # Raw metric buckets
 # ---------------------------------------------------------------------------
@@ -60,8 +79,8 @@ class RawMetrics:
     opening_mistakes: int = 0
     opening_moves_total: int = 0
 
-    # --- Strategy — K (King safety): user-only blunders + castling ---
-    user_blunders: int = 0              # user's blunders from move_evaluations
+    # --- Strategy — K (King safety): castling timing only ---
+    user_blunders: int = 0              # user's blunders (informational, not used in K)
     user_moves_total: int = 0           # user's total moves
     castling_early_games: int = 0       # games where user castled by move 15
 
@@ -97,7 +116,7 @@ class RawMetrics:
     # --- Conversion ---
     winning_games_converted: int = 0
     winning_games_total: int = 0
-    blunders_while_winning: int = 0
+    blunders_while_winning: int = 0     # games (not moves) where user blundered while winning
 
     # --- Mental stability ---
     blunder_clusters: int = 0
@@ -159,7 +178,7 @@ def compute_strategy_score(m: RawMetrics) -> float:
     """
     Strategy score: K + M + S + P + BvN composite.
 
-    K — King safety   (25%): user blunder rate + early castling bonus
+    K — King safety   (25%): early castling timing (structural king shelter)
     M — Material      (30%): user-only avg centipawn loss (win-prob calibrated)
     S — Space         (20%): strategic positional drift events per game
     P — Pawn struct   (20%): pawn errors + weak square creations
@@ -170,15 +189,11 @@ def compute_strategy_score(m: RawMetrics) -> float:
     if m.games_analyzed == 0:
         return 50.0
 
-    # K — King safety
-    if m.user_moves_total > 0:
-        blunder_rate = m.user_blunders / m.user_moves_total
-        # Exponential decay: 0%=100, 3%≈79, 7%≈57, 15%≈30
-        k_quality = _clamp(100.0 * math.exp(-8.0 * blunder_rate))
-    else:
-        k_quality = 50.0
-    castling_rate = m.castling_early_games / m.games_analyzed  # 0.0–1.0
-    k_score = _clamp(k_quality * 0.7 + castling_rate * 100.0 * 0.3)
+    # K — King safety (structural: early castling = safe king shelter)
+    # Blunder rate is NOT king safety — it's already captured in M (material accuracy).
+    # 45 base (neutral: delaying castling isn't always wrong), +45 for 100% early castling.
+    castling_rate = m.castling_early_games / m.games_analyzed
+    k_score = _clamp(45.0 + castling_rate * 45.0)
 
     # M — Material (user-only avg cp loss)
     if m.user_moves_total > 0:
@@ -258,7 +273,11 @@ def compute_conversion_score(m: RawMetrics) -> float:
         return 50.0
 
     conversion_rate = m.winning_games_converted / m.winning_games_total
-    blunder_penalty = min(30.0, m.blunders_while_winning * 5.0)
+    # blunders_while_winning is a per-game count (not per-move), so normalize by
+    # winning_games_total to get a rate. This prevents longer games from being
+    # penalized more just because they had more moves while winning.
+    blunder_game_rate = m.blunders_while_winning / m.winning_games_total
+    blunder_penalty = blunder_game_rate * 30.0   # 0% rate → +30 bonus, 100% → 0
 
     score = conversion_rate * 70 + (30 - blunder_penalty)
     return _clamp(score)
@@ -353,8 +372,10 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
             if move_san in ("O-O", "O-O-O") and move_num <= 15 and not castled_early:
                 castled_early = True
 
-            # Attack: positions where user has the initiative (at least equal or better)
-            if eval_before > 50:
+            # Attack: positions where user has the initiative (equal or slightly worse)
+            # Threshold -30 captures aggressive play from equal positions too;
+            # the old threshold of +50 missed initiative in balanced games entirely.
+            if eval_before > -30:
                 m.attacking_moves_total += 1
                 if cls in ("best", "good"):
                     m.attacking_moves_good += 1
@@ -376,8 +397,10 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
                 if cls in ("mistake", "blunder"):
                     m.opening_mistakes += 1
 
-            # Endgame: move 30+
-            if move_num >= 30:
+            # Endgame: detected by material (piece count from FEN), not move number.
+            # move_num >= 30 is unreliable: some games enter the endgame by move 20,
+            # others still have heavy pieces on move 40.
+            if _is_endgame_from_fen(e.get("fen", "")):
                 m.endgame_moves_total += 1
                 if cls == "blunder":
                     m.endgame_blunders += 1
@@ -451,16 +474,17 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
             m.winning_games_total += 1
             if result == "win":
                 m.winning_games_converted += 1
-            m.blunders_while_winning += sum(
-                1 for e in winning_moves if e.get("classification") == "blunder"
-            )
+            # Count per game (binary), not per move — prevents longer games being
+            # penalized more just because they had more moves while winning.
+            if any(e.get("classification") == "blunder" for e in winning_moves):
+                m.blunders_while_winning += 1
 
         # ----------------------------------------------------------------
-        # Endgame: winning positions specifically in the endgame (move 30+)
+        # Endgame: winning positions specifically in the endgame (material-based)
         # ----------------------------------------------------------------
         endgame_winning_moves = [
             e for e in user_evals
-            if e.get("eval_before", 0) > 200 and e.get("move_number", 0) >= 30
+            if e.get("eval_before", 0) > 200 and _is_endgame_from_fen(e.get("fen", ""))
         ]
         if endgame_winning_moves:
             m.endgame_winning_total += 1

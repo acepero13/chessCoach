@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { Chessboard } from 'react-chessboard'
-import { Send, ChevronLeft, Lightbulb, Eye, Trophy } from 'lucide-react'
+import { Send, ChevronLeft, Lightbulb, Eye, Trophy, ChevronDown, ChevronUp } from 'lucide-react'
 import { startSession, submitAnswer } from '../api/client'
 
 function classificationClass(c) {
@@ -30,6 +30,8 @@ export default function CoachingSession() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
+  const [sessionSummary, setSessionSummary] = useState(null)
+  const [summaryExpanded, setSummaryExpanded] = useState(true)
 
   useEffect(() => {
     const init = async () => {
@@ -46,6 +48,7 @@ export default function CoachingSession() {
         setQuestion(data.question)
         setHint(data.hint)
         setProgress({ reviewed: 0, total: data.total_critical_moves })
+        setSessionSummary(data.session_summary || null)
       } catch (e) {
         setError(e.response?.data?.detail || e.message)
       } finally {
@@ -64,6 +67,7 @@ export default function CoachingSession() {
       setRevealed(data)
       setProgress(data.progress)
       setPhase(data.completed ? 'complete' : 'revealed')
+      setSummaryExpanded(false)  // collapse summary once reviewing starts
     } catch (e) {
       setError(e.response?.data?.detail || e.message)
     } finally {
@@ -133,6 +137,27 @@ export default function CoachingSession() {
           )}
         </div>
 
+        {/* Session summary */}
+        {sessionSummary && (
+          <div className="mb-4 bg-chess-panel rounded-xl overflow-hidden border border-slate-700">
+            <button
+              onClick={() => setSummaryExpanded(v => !v)}
+              className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-slate-800/40 transition-colors"
+            >
+              <span className="text-sm font-semibold text-chess-gold">Game Overview</span>
+              {summaryExpanded
+                ? <ChevronUp size={14} className="text-slate-400" />
+                : <ChevronDown size={14} className="text-slate-400" />
+              }
+            </button>
+            {summaryExpanded && (
+              <div className="px-4 pb-4 text-sm text-slate-300 leading-relaxed">
+                {sessionSummary}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Board */}
           <div>
@@ -195,21 +220,23 @@ export default function CoachingSession() {
 
               {/* Answer input */}
               {phase === 'question' && (
-                <div className="flex gap-2">
-                  <input
+                <div className="flex flex-col gap-2">
+                  <textarea
                     value={answer}
                     onChange={e => setAnswer(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleSubmitAnswer()}
-                    placeholder="Your answer…"
-                    className="flex-1 bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold"
+                    onKeyDown={e => e.key === 'Enter' && e.ctrlKey && handleSubmitAnswer()}
+                    placeholder="What would you play and why? Explain your thinking — the coach will assess your reasoning, not just your move."
+                    rows={3}
+                    className="w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
                   />
                   <button
                     onClick={handleSubmitAnswer}
                     disabled={submitting || !answer.trim()}
-                    className="bg-chess-gold text-chess-dark p-2 rounded-lg hover:opacity-90 disabled:opacity-50"
+                    className="flex items-center justify-center gap-2 bg-chess-gold text-chess-dark font-semibold px-4 py-2 rounded-lg hover:opacity-90 disabled:opacity-50 text-sm"
                   >
-                    <Send size={16} />
+                    {submitting ? 'Analyzing…' : <><Send size={14} /> Submit Answer</>}
                   </button>
+                  <p className="text-xs text-slate-600">Ctrl+Enter to submit</p>
                 </div>
               )}
             </div>
@@ -221,6 +248,14 @@ export default function CoachingSession() {
                   <Eye size={16} className="text-chess-gold" />
                   <span className="font-semibold text-chess-gold">Engine Reveals</span>
                 </div>
+
+                {/* Show what the user wrote */}
+                {revealed.user_answer_text && (
+                  <div className="bg-chess-dark rounded-lg p-3 border-l-2 border-slate-600">
+                    <div className="text-xs text-slate-500 mb-1">Your answer</div>
+                    <p className="text-sm text-slate-300 italic">"{revealed.user_answer_text}"</p>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   {/* Student's suggestion (if they typed a legal move) */}
