@@ -148,13 +148,15 @@ def detect_strategic_patterns(move_evals: list[MoveEval]) -> list[dict]:
                     "move_san": ev.move_san,
                 })
 
-        # Weak square creation: user's mistake introduces new weak squares for themselves
+        # Weak square creation: user's mistake gives the opponent new outpost squares
+        # _has_weak_squares(board, not color) = outpost opportunities for the opponent
+        # in the user's own half — i.e., squares that are weak *for* the user.
         if ev.classification in ("mistake", "blunder") and i % 3 == 0:  # Sample to avoid N^2
-            had_weak = _has_weak_squares(board, color)
+            had_weak = _has_weak_squares(board, not color)
             if not had_weak:  # only flag if weakness is newly introduced
                 board_after = board.copy()
                 board_after.push(chess.Move.from_uci(ev.move_uci))
-                if _has_weak_squares(board_after, color):
+                if _has_weak_squares(board_after, not color):
                     patterns.append({
                         "type": "weak_squares_created",
                         "move_number": ev.move_number,

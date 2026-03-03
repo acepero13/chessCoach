@@ -239,7 +239,7 @@ def compute_endgame_score(m: RawMetrics) -> float:
 
     if m.endgame_moves_total > 0:
         blunder_rate = m.endgame_blunders / m.endgame_moves_total
-        components.append((1 - min(1.0, blunder_rate * 10)) * 40)
+        components.append((1 - blunder_rate) * 40)
 
     if not components:
         return 50.0
@@ -265,7 +265,7 @@ def compute_time_management_score(m: RawMetrics) -> float:
         return 50.0
 
     blunder_rate = m.blunders_time_trouble / m.moves_time_trouble
-    return _clamp((1.0 - min(1.0, blunder_rate * 2)) * 100)
+    return _clamp((1.0 - blunder_rate) * 100)
 
 
 def compute_conversion_score(m: RawMetrics) -> float:
