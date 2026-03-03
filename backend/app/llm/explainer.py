@@ -3,10 +3,16 @@ LLM coaching explanations via Ollama Python SDK.
 All calls degrade gracefully — a missing/slow LLM never crashes the app.
 """
 import json
+import asyncio
 from ollama import AsyncClient
 from app.config import settings
 
 _client = AsyncClient(host=settings.ollama_host)
+
+# Hard timeout per LLM call so a slow model never blocks the HTTP response.
+# Single-sentence outputs use LLM_TIMEOUT_SHORT; longer outputs use LLM_TIMEOUT_LONG.
+LLM_TIMEOUT_SHORT = 40   # seconds — for 1-sentence outputs (~120 tokens)
+LLM_TIMEOUT_LONG  = 70   # seconds — for 2-3 sentence / paragraph outputs (~300 tokens)
 
 SYSTEM_PROMPT = (
     "You are a chess coach assistant. You ONLY explain what the chess engine has already "
@@ -16,20 +22,31 @@ SYSTEM_PROMPT = (
 )
 
 
-async def _call_ollama(prompt: str, system: str = SYSTEM_PROMPT) -> str | None:
+async def _call_ollama(
+    prompt: str,
+    system: str = SYSTEM_PROMPT,
+    num_predict: int = 200,
+    timeout: float = LLM_TIMEOUT_LONG,
+) -> str | None:
     """
-    Call Ollama. Returns None if unavailable so callers can degrade gracefully.
+    Call Ollama with a hard timeout. Returns None on any failure so callers degrade gracefully.
     """
-    try:
+    async def _chat() -> str:
         resp = await _client.chat(
             model=settings.ollama_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            options={"temperature": 0.3, "num_predict": 400},
+            options={"temperature": 0.3, "num_predict": num_predict},
         )
         return resp.message.content.strip()
+
+    try:
+        return await asyncio.wait_for(_chat(), timeout=timeout)
+    except asyncio.TimeoutError:
+        print(f"[llm] Ollama timed out after {timeout}s")
+        return None
     except Exception as exc:
         print(f"[llm] Ollama unavailable ({exc})")
         return None
@@ -116,7 +133,8 @@ async def explain_mistake(
         )
         label = "Key idea"
 
-    concept = await _call_ollama(concept_prompt)
+    # 1 sentence → small token budget, short timeout
+    concept = await _call_ollama(concept_prompt, num_predict=120, timeout=LLM_TIMEOUT_SHORT)
     if concept:
         parts.append(f"{label} — {concept}")
 
@@ -167,7 +185,7 @@ async def generate_position_question(
             "Only mention things that are literally present in the position."
         )
 
-    hint = await _call_ollama(hint_prompt)
+    hint = await _call_ollama(hint_prompt, num_predict=120, timeout=LLM_TIMEOUT_SHORT)
     if hint is None:
         hints = {
             "missed_fork": "Look for a piece that can leap to a square attacking two targets simultaneously.",
@@ -241,7 +259,7 @@ async def explain_annotation(
         f"In ONE sentence, contrast the chess idea behind the player's move vs the engine's recommendation. "
         f"Do NOT invent moves or mention specific squares beyond those already listed."
     )
-    concept = await _call_ollama(concept_prompt)
+    concept = await _call_ollama(concept_prompt, num_predict=120, timeout=LLM_TIMEOUT_SHORT)
     if concept:
         parts.append(f"Key idea — {concept}")
 
@@ -277,7 +295,8 @@ async def generate_review_comment(
             f"Chess player handled move {move_san} correctly: assessed position as {user_eval_label} ({eval_verdict}), "
             f"included {engine_best_move} in candidates. They wrote: \"{annotation_text[:200]}\". "
             f"Engine: {engine_best_move}: {pv_str}. "
-            f"In 1-2 sentences, confirm what they understood correctly and add one chess principle."
+            f"In 1-2 sentences, confirm what they understood correctly and add one chess principle.",
+            num_predict=160, timeout=LLM_TIMEOUT_SHORT,
         )
         return comment or f"Correct evaluation and candidate selection. Engine's {engine_best_move} ({pv_str}) reflects good positional understanding."
 
@@ -330,7 +349,7 @@ async def generate_review_comment(
             "Do NOT mention squares beyond those listed."
         )
 
-    comment = await _call_ollama(prompt)
+    comment = await _call_ollama(prompt, num_predict=200, timeout=LLM_TIMEOUT_SHORT)
     if comment:
         return comment
 
@@ -364,7 +383,7 @@ async def generate_review_reply(
         f"(3) close with the key chess principle from this position. "
         f"Do NOT invent moves or squares beyond those already listed."
     )
-    reply = await _call_ollama(prompt)
+    reply = await _call_ollama(prompt, num_predict=200, timeout=LLM_TIMEOUT_LONG)
     if reply:
         return reply
     pv_short = " ".join(engine_pv_san[:3]) if engine_pv_san else engine_best_move
@@ -409,7 +428,7 @@ async def generate_session_summary(
         f"Be specific and direct. Do not mention specific squares or invent moves."
     )
 
-    result_text = await _call_ollama(prompt)
+    result_text = await _call_ollama(prompt, num_predict=200, timeout=LLM_TIMEOUT_LONG)
     if result_text:
         return result_text
 
@@ -420,6 +439,82 @@ async def generate_session_summary(
         f"Main themes: {patterns_text}. "
         f"Let's work through each critical position."
     )
+
+
+async def analyze_questionnaire(
+    game_result: str,              # "win" / "loss" / "draw" / "unknown"
+    result_reason: str,
+    key_moment: str,
+    takeaway: str,
+    would_do_differently: str,
+    plan_adherence: str,           # "always"/"mostly"/"reacting"/"no_plan"
+    time_pressure: str,            # "not_at_all"/"slightly"/"significantly"
+    opening_prep: str,             # "solid"/"ok"/"poor"/"winging_it"
+    worst_moves: list[dict],       # [{move_san, centipawn_loss, classification}]
+    pattern_types: list[str],      # unique pattern type strings
+) -> str | None:
+    """
+    Analyze the player's post-game questionnaire answers in light of actual engine data.
+    Returns 3-4 sentences of targeted coaching feedback, or a deterministic fallback.
+    """
+    # Build worst moves text
+    if worst_moves:
+        moves_text = ", ".join(
+            f"{m['move_san']} ({m['centipawn_loss']:.0f}cp, {m['classification']})"
+            for m in worst_moves[:3]
+        )
+    else:
+        moves_text = "no significant errors detected"
+
+    patterns_str = ", ".join(t.replace("_", " ") for t in pattern_types[:4]) or "none detected"
+
+    # Build prompt, omitting blank optional fields
+    lines = [
+        f"A chess player {game_result} a game and reflected on it.",
+        "",
+        "Their self-assessment:",
+        f'- Why they {game_result}: "{result_reason}"',
+    ]
+    if key_moment.strip():
+        lines.append(f'- Key turning point: "{key_moment}"')
+    lines.append(f'- Main takeaway: "{takeaway}"')
+    if would_do_differently.strip():
+        lines.append(f'- Would do differently: "{would_do_differently}"')
+    lines += [
+        f"- Plan adherence: {plan_adherence}",
+        f"- Time pressure: {time_pressure}",
+        f"- Opening prep: {opening_prep}",
+        "",
+        "Objective engine data:",
+        f"- Their 3 worst moves: {moves_text}",
+        f"- Recurring patterns: {patterns_str}",
+        "",
+        "As a chess coach, write 3-4 sentences:",
+        "1. Validate or gently challenge their stated reason — compare to the engine's worst moves",
+        "2. Reinforce or sharpen their takeaway using the concrete pattern data",
+        "3. Identify any gap or blind spot in their self-assessment",
+        "4. End with ONE specific question to deepen their reflection",
+        "",
+        "Under 120 words. Be direct, specific, encouraging.",
+    ]
+    prompt = "\n".join(lines)
+
+    result = await _call_ollama(prompt, num_predict=250, timeout=LLM_TIMEOUT_LONG)
+    if result:
+        return result
+
+    # Deterministic fallback
+    worst = worst_moves[0] if worst_moves else None
+    parts = ["Your self-assessment is a useful start."]
+    if worst:
+        parts.append(
+            f"The engine flagged {worst['move_san']} ({worst['centipawn_loss']:.0f} cp) "
+            f"as the biggest error."
+        )
+    parts.append(f"Recurring patterns: {patterns_str}.")
+    if takeaway:
+        parts.append(f"Takeaway noted: \"{takeaway[:80]}\"")
+    return " ".join(parts)
 
 
 async def generate_batch_summary(
@@ -453,7 +548,7 @@ Write a 3-paragraph coaching summary:
 
 Base everything strictly on the numbers above."""
 
-    result = await _call_ollama(prompt)
+    result = await _call_ollama(prompt, num_predict=400, timeout=LLM_TIMEOUT_LONG)
     if result is None:
         score_lines = "\n".join(f"- {k}: {v:.0f}/100" for k, v in scores.items())
         return (

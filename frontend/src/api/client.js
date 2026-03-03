@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: 'http://localhost:8000',
-  timeout: 120000,
+  timeout: 180000,   // 3 min — engine (depth 20) + LLM (40 s timeout) + margin
 })
 
 // Games
@@ -67,8 +67,8 @@ export const startAnnotationSession = (userId, gameId, timeBudget) =>
 export const submitAnnotation = (sessionId, payload) =>
   api.post(`/selfanalysis/session/${sessionId}/annotate`, payload)
 
-export const completeAnnotationSession = (sessionId) =>
-  api.post(`/selfanalysis/session/${sessionId}/complete`)
+export const completeAnnotationSession = (sessionId, feelings = null) =>
+  api.post(`/selfanalysis/session/${sessionId}/complete`, { game_feelings: feelings })
 
 export const getAnnotationSession = (sessionId) =>
   api.get(`/selfanalysis/session/${sessionId}`)

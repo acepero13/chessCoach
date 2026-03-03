@@ -142,6 +142,8 @@ class AnnotationSession(Base):
     focused_move_indices = Column(JSON, default=list)   # list[int]: indices into move_evaluations
     moves_data = Column(JSON, default=list)             # list[dict]: per-move annotation + engine data
     reflection = Column(JSON)                           # {eval_accuracy, candidate_quality, ...}
+    game_feelings = Column(JSON)                        # full questionnaire JSON
+    questionnaire_coaching = Column(JSON)               # LLM coaching feedback on questionnaire
     completed = Column(Boolean, default=False)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)

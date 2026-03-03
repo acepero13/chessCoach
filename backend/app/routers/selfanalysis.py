@@ -4,6 +4,7 @@ Users review their own game move-by-move, writing annotations and candidate move
 BEFORE the engine reveal. Engine evaluation stays hidden until user commits reasoning.
 """
 import chess
+import re
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,10 +12,12 @@ from sqlalchemy import select, desc
 from pydantic import BaseModel
 from typing import Optional
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from app.database import get_db
 from app.models import Game, GameAnalysis, AnnotationSession
 import asyncio
-from app.llm.explainer import explain_annotation, generate_review_comment, generate_review_reply
+from app.llm.explainer import explain_annotation, generate_review_comment, generate_review_reply, analyze_questionnaire
 from app.engine.stockfish import get_engine
 from app.patterns.tactical_detectors import _is_hanging
 
@@ -51,6 +54,13 @@ def _eval_verdict(user_label: str, engine_eval_before: float) -> str:
     if diff == 1:
         return "slightly off"
     return "significantly off"
+
+
+def _strip_html(text: str) -> str:
+    """Strip HTML tags from user annotation before passing to LLM."""
+    if not text:
+        return text
+    return re.sub(r'<[^>]+>', ' ', text).strip()
 
 
 def _pv_uci_to_san(fen: str, pv_uci: list[str]) -> list[str]:
@@ -121,6 +131,11 @@ def _build_all_game_moves(evals: list, user_color: str) -> tuple[list, list]:
             "classification": classification,
             "centipawn_loss": e.get("centipawn_loss", 0.0),
             "priority": priority,
+            # Engine data from batch analysis — available for every move
+            "best_move_uci": e.get("best_move_uci", ""),
+            "best_move_san": e.get("best_move_san", ""),
+            "eval_before": e.get("eval_before", 0.0),
+            "eval_after": e.get("eval_after", 0.0),
         })
         if is_user:
             user_eval_indices.append(i)
@@ -144,6 +159,8 @@ class AnnotateRequest(BaseModel):
     user_eval_label: str = ""       # "winning"/"better"/"equal"/"worse"/"losing"
     user_confidence: int = 0        # 1–5, 0 = not set
     user_marked_critical: bool = False
+    user_squares: dict = {}         # { square: cssColor } — right-click highlights
+    user_arrows: list[dict] = []    # [{ startSquare, endSquare, color }] — drawn arrows
 
 
 # ──────────────────────────────────────────────
@@ -205,6 +222,7 @@ async def start_annotation_session(
         "white_player": game.white_player,
         "black_player": game.black_player,
         "user_color": user_color,
+        "game_result": game.result.value if game.result else None,
         "time_budget_minutes": req.time_budget_minutes,
         "suggested_minutes_per_move": suggested_minutes_per_move,
         "total_user_moves": total_user_moves,
@@ -251,25 +269,14 @@ async def annotate_move(
 
     engine = await get_engine()
 
-    # Deeper analysis for critical positions
-    engine_multipv = None
-    if req.user_marked_critical:
-        engine_multipv = await engine.get_multipv(fen_before, num_pv=4, depth=25)
-        pv_uci = []
-        best_move_san_engine = move_eval.get("best_move_san", "")
-        if engine_multipv:
-            # Get PV from top line
-            top_line = engine_multipv[0]
-            pv_uci_from_multipv = top_line.get("pv_san", [])  # already SAN
-            pv_san = pv_uci_from_multipv
-        else:
-            pv_san = []
-    else:
-        engine_info = await engine.get_best_move(fen_before, depth=20)
-        pv_uci = engine_info.get("pv", [])[:5]
-        pv_san = _pv_uci_to_san(fen_before, pv_uci)
+    # Always get top engine lines (like Lichess): 3 for normal moves, 4 for critical
+    num_pv = 4 if req.user_marked_critical else 3
+    depth = 25 if req.user_marked_critical else 20
+    engine_multipv = await engine.get_multipv(fen_before, num_pv=num_pv, depth=depth)
+    pv_san = engine_multipv[0].get("pv_san", []) if engine_multipv else []
 
     best_move_san = move_eval.get("best_move_san", "")
+    best_move_uci_val = move_eval.get("best_move_uci", "")
     engine_eval_before = move_eval.get("eval_before", 0.0)
     engine_eval_after = move_eval.get("eval_after", 0.0)
     centipawn_loss = move_eval.get("centipawn_loss", 0.0)
@@ -286,21 +293,8 @@ async def annotate_move(
     # Deterministic eval verdict
     verdict = _eval_verdict(req.user_eval_label, engine_eval_before)
 
-    # LLM explanation
-    explanation = await explain_annotation(
-        move_san=move_eval.get("move_san", ""),
-        best_move_san=best_move_san,
-        centipawn_loss=centipawn_loss,
-        classification=classification,
-        user_annotation=req.user_annotation,
-        user_eval_label=req.user_eval_label,
-        eval_verdict=verdict,
-        user_candidates=req.user_candidates,
-        engine_pv_san=pv_san,
-        patterns=patterns,
-    )
-
-    # Build move entry for storage
+    # Build move entry (without explanation yet) and persist engine data immediately.
+    # This ensures the reveal is saved even if the subsequent LLM call times out.
     move_entry = {
         "move_index": req.move_index,
         "move_number": move_eval.get("move_number", 0),
@@ -313,20 +307,21 @@ async def annotate_move(
         "user_eval_label": req.user_eval_label,
         "user_confidence": req.user_confidence,
         "user_marked_critical": req.user_marked_critical,
+        "user_squares": req.user_squares,
+        "user_arrows": req.user_arrows,
         "engine_eval_before": engine_eval_before,
         "engine_eval_after": engine_eval_after,
         "centipawn_loss": centipawn_loss,
         "classification": classification,
         "engine_best_move": best_move_san,
+        "engine_best_move_uci": best_move_uci_val,
         "engine_pv_san": pv_san,
         "engine_multipv": engine_multipv,
         "patterns": patterns,
-        "explanation": explanation,
+        "explanation": "",
     }
 
-    # Append to session moves_data
     moves_data = list(session.moves_data or [])
-    # Replace if already annotated (re-submit), else append
     existing_indices = [m["move_index"] for m in moves_data]
     if req.move_index in existing_indices:
         pos = existing_indices.index(req.move_index)
@@ -334,7 +329,30 @@ async def annotate_move(
     else:
         moves_data.append(move_entry)
     session.moves_data = moves_data
+    flag_modified(session, "moves_data")
     await db.commit()
+
+    # LLM explanation — runs after engine data is already committed.
+    # If it times out or fails, the reveal still works; explanation is just empty.
+    explanation = await explain_annotation(
+        move_san=move_eval.get("move_san", ""),
+        best_move_san=best_move_san,
+        centipawn_loss=centipawn_loss,
+        classification=classification,
+        user_annotation=_strip_html(req.user_annotation),
+        user_eval_label=req.user_eval_label,
+        eval_verdict=verdict,
+        user_candidates=req.user_candidates,
+        engine_pv_san=pv_san,
+        patterns=patterns,
+    )
+
+    # Patch explanation into the stored entry if LLM succeeded
+    if explanation:
+        move_entry["explanation"] = explanation
+        session.moves_data = moves_data  # already mutated in place above
+        flag_modified(session, "moves_data")
+        await db.commit()
 
     return {
         "engine_eval_before": engine_eval_before,
@@ -342,17 +360,25 @@ async def annotate_move(
         "centipawn_loss": centipawn_loss,
         "classification": classification,
         "engine_best_move": best_move_san,
+        "engine_best_move_uci": best_move_uci_val,
         "engine_pv_san": pv_san,
         "engine_multipv": engine_multipv,
         "patterns": patterns,
         "explanation": explanation,
         "eval_verdict": verdict,
+        "user_squares": req.user_squares,
+        "user_arrows": req.user_arrows,
     }
+
+
+class CompleteSessionRequest(BaseModel):
+    game_feelings: Optional[dict] = None   # {tags: list[str], note: str}
 
 
 @router.post("/session/{session_id}/complete")
 async def complete_session(
     session_id: int,
+    req: CompleteSessionRequest = CompleteSessionRequest(),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -463,11 +489,67 @@ async def complete_session(
     }
 
     session.reflection = reflection
+    if req.game_feelings:
+        session.game_feelings = req.game_feelings
+
+    # ── Questionnaire coaching from LLM ──
+    # Extract worst moves and pattern types for grounded LLM context
+    worst_moves_sorted = sorted(
+        [m for m in moves_data if m.get("centipawn_loss", 0) > 0],
+        key=lambda m: m.get("centipawn_loss", 0),
+        reverse=True,
+    )[:3]
+    worst_moves_brief = [
+        {
+            "move_san": m["move_san"],
+            "centipawn_loss": m["centipawn_loss"],
+            "classification": m["classification"],
+        }
+        for m in worst_moves_sorted
+    ]
+    pattern_types = list({
+        p["type"]
+        for m in moves_data
+        for p in (m.get("patterns") or [])
+    })
+
+    # Load game result for the prompt
+    game_q = await db.execute(select(Game).where(Game.id == session.game_id))
+    game_obj = game_q.scalar_one_or_none()
+    game_result_str = game_obj.result.value if game_obj and game_obj.result else "unknown"
+
+    q = req.game_feelings or {}
+    # Only call LLM if there's substantive questionnaire content to analyze
+    has_questionnaire = bool(
+        q.get("result_reason", "").strip() or q.get("takeaway", "").strip()
+    )
+    if has_questionnaire:
+        questionnaire_coaching = await analyze_questionnaire(
+            game_result=game_result_str,
+            result_reason=q.get("result_reason", ""),
+            key_moment=q.get("key_moment", ""),
+            takeaway=q.get("takeaway", ""),
+            would_do_differently=q.get("would_do_differently", ""),
+            plan_adherence=q.get("plan_adherence", ""),
+            time_pressure=q.get("time_pressure", ""),
+            opening_prep=q.get("opening_prep", ""),
+            worst_moves=worst_moves_brief,
+            pattern_types=pattern_types,
+        )
+    else:
+        questionnaire_coaching = None
+    session.questionnaire_coaching = questionnaire_coaching
+    flag_modified(session, "questionnaire_coaching")
+
     session.completed = True
     session.completed_at = datetime.utcnow()
     await db.commit()
 
-    return reflection
+    return {
+        **reflection,
+        "game_feelings": session.game_feelings,
+        "questionnaire_coaching": questionnaire_coaching,
+    }
 
 
 @router.get("/session/{session_id}")
@@ -562,6 +644,7 @@ async def get_coach_review(
             "eval_verdict": verdict,
             "best_in_candidates": best_in_candidates,
             "engine_best_move": engine_best,
+            "engine_best_move_uci": move.get("engine_best_move_uci", ""),
             "engine_pv_san": engine_pv,
             "engine_multipv": move.get("engine_multipv"),
             "patterns": patterns,
@@ -649,6 +732,7 @@ async def get_latest_session_for_game(
         "white_player": game.white_player,
         "black_player": game.black_player,
         "user_color": user_color,
+        "game_result": game.result.value if game.result else None,
         "time_budget_minutes": session.time_budget_minutes,
         "suggested_minutes_per_move": suggested_minutes_per_move,
         "total_user_moves": total_user_moves,
@@ -656,4 +740,6 @@ async def get_latest_session_for_game(
         "annotated_move_indices": annotated_move_indices,
         "moves_data": moves_data,
         "reflection": session.reflection,
+        "game_feelings": session.game_feelings,
+        "questionnaire_coaching": session.questionnaire_coaching,
     }

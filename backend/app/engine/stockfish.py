@@ -242,6 +242,7 @@ class StockfishEngine:
             lines.append({
                 "rank": i + 1,
                 "move_san": board.san(best),
+                "move_uci": best.uci(),
                 "score_cp": _pov_cp(info["score"], board.turn),
                 "pv_san": pv_san,
             })

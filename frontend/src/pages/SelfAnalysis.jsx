@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Chessboard } from 'react-chessboard'
 import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
-  PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle,
+  PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle, Cpu, Info,
+  Bold, Italic, List,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
@@ -42,6 +43,152 @@ const EVAL_OPTIONS = [
 
 const TIME_BUDGETS = [15, 30, 60]
 
+// Convert centipawns to pawn-unit string (+3.2 / -4.0), handles mate scores
+function fmtEval(cp) {
+  if (cp == null) return '?'
+  if (Math.abs(cp) >= 9000) return cp > 0 ? '+M' : '-M'
+  const pawns = cp / 100
+  return `${pawns > 0 ? '+' : ''}${pawns.toFixed(1)}`
+}
+
+// ── Arrow helpers ─────────────────────────────────────────────────────────────
+
+// Engine best-line arrow colors: rank 1 = darkest, rank 4 = lightest
+const ENGINE_ARROW_COLORS = [
+  'rgba(0, 140, 0, 0.92)',
+  'rgba(50, 170, 50, 0.68)',
+  'rgba(100, 190, 80, 0.48)',
+  'rgba(150, 210, 100, 0.30)',
+]
+
+// Square highlight color cycle on right-click: orange → red → green → clear
+const HIGHLIGHT_COLORS = [
+  'rgba(255, 170, 0, 0.55)',
+  'rgba(220, 50, 50, 0.55)',
+  'rgba(20, 160, 80, 0.55)',
+]
+
+function uciToSquares(uci) {
+  if (!uci || uci.length < 4) return null
+  return { from: uci.slice(0, 2), to: uci.slice(2, 4) }
+}
+
+// ── RichTextEditor ────────────────────────────────────────────────────────────
+// Contenteditable div with a Bold / Italic / List toolbar.
+// `defaultValue` is HTML; `onChange` fires with the current innerHTML string.
+function RichTextEditor({ defaultValue, onChange, placeholder }) {
+  const editorRef = useRef(null)
+
+  // Set initial HTML once on mount (defaultValue changes when navigating)
+  useEffect(() => {
+    if (editorRef.current) {
+      editorRef.current.innerHTML = defaultValue || ''
+    }
+    // intentionally runs only when the editor key changes (parent uses key=)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const exec = (cmd) => {
+    document.execCommand(cmd, false, null)
+    editorRef.current?.focus()
+    onChange?.(editorRef.current?.innerHTML || '')
+  }
+
+  const handleInput = () => {
+    onChange?.(editorRef.current?.innerHTML || '')
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      {/* Toolbar */}
+      <div className="flex gap-1">
+        {[
+          { icon: <Bold size={12} />, cmd: 'bold', title: 'Bold (Ctrl+B)' },
+          { icon: <Italic size={12} />, cmd: 'italic', title: 'Italic (Ctrl+I)' },
+          { icon: <List size={12} />, cmd: 'insertUnorderedList', title: 'Bullet list' },
+        ].map(({ icon, cmd, title }) => (
+          <button
+            key={cmd}
+            type="button"
+            title={title}
+            onMouseDown={e => { e.preventDefault(); exec(cmd) }}
+            className="p-1.5 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition-colors"
+          >
+            {icon}
+          </button>
+        ))}
+      </div>
+      {/* Editor */}
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        onInput={handleInput}
+        data-placeholder={placeholder}
+        className="w-full min-h-[72px] bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-chess-gold prose-chess empty:before:content-[attr(data-placeholder)] empty:before:text-slate-500"
+        style={{ lineHeight: '1.5' }}
+      />
+    </div>
+  )
+}
+
+// ── BoardLegend ───────────────────────────────────────────────────────────────
+// Small info icon that shows a hover tooltip explaining board drawing controls.
+function BoardLegend() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative inline-flex">
+      <button
+        type="button"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        className="text-slate-500 hover:text-slate-300 transition-colors"
+        aria-label="Board controls help"
+      >
+        <Info size={13} />
+      </button>
+      {open && (
+        <div className="absolute top-full right-0 mt-2 w-56 z-50 bg-slate-800 border border-slate-600 rounded-lg p-3 text-xs text-slate-300 shadow-xl pointer-events-none">
+          {/* Arrow pointing up */}
+          <div className="absolute bottom-full right-2 border-4 border-transparent border-b-slate-600" />
+          <div className="font-semibold text-white mb-2">Board controls</div>
+          <ul className="flex flex-col gap-1.5">
+            <li><span className="text-chess-gold font-mono">Right-drag</span> — draw an arrow</li>
+            <li><span className="text-chess-gold font-mono">Right-click square</span> — cycle highlight color</li>
+            <li><span className="text-chess-gold font-mono">Left-click</span> — clear drawn arrows</li>
+            <li><span className="text-chess-gold font-mono">Arrows + highlights</span> are saved when you submit</li>
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// revealData = annotatedMoves entry (has multipv); moveData = allGameMoves entry (has best_move_uci)
+function buildEngineArrows(revealData, moveData) {
+  // Prefer multipv from reveal (richer, fresher analysis)
+  if (revealData?.engine_multipv?.length > 0) {
+    return revealData.engine_multipv
+      .map((line, i) => {
+        const sq = uciToSquares(line.move_uci)
+        if (!sq) return null
+        return {
+          startSquare: sq.from,
+          endSquare: sq.to,
+          color: ENGINE_ARROW_COLORS[i] ?? ENGINE_ARROW_COLORS.at(-1),
+        }
+      })
+      .filter(Boolean)
+  }
+  // Fall back to single best move (from reveal or batch analysis)
+  const uci = revealData?.engine_best_move_uci || moveData?.best_move_uci
+  const sq = uciToSquares(uci)
+  if (!sq) return []
+  return [{ startSquare: sq.from, endSquare: sq.to, color: ENGINE_ARROW_COLORS[0] }]
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SelfAnalysis({ userId }) {
@@ -78,8 +225,33 @@ export default function SelfAnalysis({ userId }) {
   const [markedCritical, setMarkedCritical] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
+  // Draft persistence: saves in-progress form per move_index so navigation doesn't wipe it
+  const [draftAnnotations, setDraftAnnotations] = useState({})
+  // Ref always holds current form values — lets goTo read them without being a dependency
+  const formRef = useRef({ annotation: '', candidates: ['', '', ''], evalLabel: '', confidence: 0, markedCritical: false })
+  useEffect(() => {
+    formRef.current = { annotation, candidates, evalLabel, confidence, markedCritical }
+  }, [annotation, candidates, evalLabel, confidence, markedCritical])
+
+  // Arrow overlays & square highlights (shared across annotating + coach_review)
+  const [showEngineArrows, setShowEngineArrows] = useState(false)
+  const [squareHighlights, setSquareHighlights] = useState({})  // { moveIndex: { square: cssColor } }
+  const [userArrows, setUserArrows] = useState({})              // { moveIndex: Arrow[] }
+
   // Reflection
   const [reflection, setReflection] = useState(null)
+  const [gameResult, setGameResult] = useState(null)  // "win" | "loss" | "draw" | null
+  const [feelings, setFeelings] = useState({
+    feelings: [],
+    result_reason: '',
+    key_moment: '',
+    takeaway: '',
+    would_do_differently: '',
+    plan_adherence: '',
+    time_pressure: '',
+    opening_prep: '',
+    extra_note: '',
+  })
 
   // Coach review
   const [userColor, setUserColor] = useState(null)
@@ -106,9 +278,37 @@ export default function SelfAnalysis({ userId }) {
 
   const goTo = useCallback((idx) => {
     if (idx < 0 || idx >= allGameMoves.length) return
+
+    // Save current form to draft before leaving (uses ref — no dependency on form state)
+    const currentMoveIndex = allGameMoves[navIdx]?.move_index
+    if (currentMoveIndex !== undefined) {
+      setDraftAnnotations(prev => ({ ...prev, [currentMoveIndex]: { ...formRef.current } }))
+    }
+
     setNavIdx(idx)
-    resetFormOnly()
-  }, [allGameMoves.length])
+  }, [allGameMoves, navIdx])
+
+  // Restore draft (or blank form) whenever navIdx changes
+  useEffect(() => {
+    const moveIndex = allGameMoves[navIdx]?.move_index
+    if (moveIndex === undefined) return
+    const draft = draftAnnotations[moveIndex]
+    if (draft) {
+      setAnnotation(draft.annotation)
+      setCandidates(draft.candidates)
+      setEvalLabel(draft.evalLabel)
+      setConfidence(draft.confidence)
+      setMarkedCritical(draft.markedCritical)
+    } else {
+      setAnnotation('')
+      setCandidates(['', '', ''])
+      setEvalLabel('')
+      setConfidence(0)
+      setMarkedCritical(false)
+    }
+  // draftAnnotations intentionally excluded — we only want to run on navigation
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navIdx, allGameMoves])
 
   const goPrev = useCallback(() => {
     if (criticalOnly) {
@@ -132,6 +332,7 @@ export default function SelfAnalysis({ userId }) {
   useEffect(() => {
     const handler = (e) => {
       if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return
+      if (e.target.contentEditable === 'true') return
       if (e.key === 'ArrowLeft') goPrev()
       if (e.key === 'ArrowRight') goNext()
     }
@@ -148,9 +349,41 @@ export default function SelfAnalysis({ userId }) {
         const data = res.data
 
         if (data.completed) {
-          setReflection(data.reflection)
+          setReflection({ ...data.reflection, game_feelings: data.game_feelings, questionnaire_coaching: data.questionnaire_coaching })
           setSessionId(data.session_id)
           setUserColor(data.user_color)
+          setGameResult(data.game_result || null)
+          // Load game data so the user can review their annotations
+          loadSessionData(data)
+          const preAnnotated = {}
+          const restoredHighlights = {}
+          const restoredArrows = {}
+          for (const m of data.moves_data || []) {
+            preAnnotated[m.move_index] = {
+              engine_eval_before: m.engine_eval_before,
+              engine_eval_after: m.engine_eval_after,
+              centipawn_loss: m.centipawn_loss,
+              classification: m.classification,
+              engine_best_move: m.engine_best_move,
+              engine_best_move_uci: m.engine_best_move_uci,
+              engine_pv_san: m.engine_pv_san,
+              engine_multipv: m.engine_multipv,
+              patterns: m.patterns,
+              explanation: m.explanation,
+              eval_verdict: null,
+              user_annotation: m.user_annotation || '',
+              user_candidates: m.user_candidates || [],
+              user_eval_label: m.user_eval_label || '',
+            }
+            if (m.user_squares && Object.keys(m.user_squares).length > 0)
+              restoredHighlights[m.move_index] = m.user_squares
+            if (m.user_arrows?.length > 0)
+              restoredArrows[m.move_index] = m.user_arrows
+          }
+          setAnnotatedMoves(preAnnotated)
+          setSquareHighlights(restoredHighlights)
+          setUserArrows(restoredArrows)
+          setNavIdx(0)
           setPhase('complete')
           return
         }
@@ -160,6 +393,8 @@ export default function SelfAnalysis({ userId }) {
 
         // Pre-populate annotated moves from stored moves_data
         const preAnnotated = {}
+        const restoredHighlights = {}
+        const restoredArrows = {}
         for (const m of data.moves_data || []) {
           preAnnotated[m.move_index] = {
             engine_eval_before: m.engine_eval_before,
@@ -167,14 +402,24 @@ export default function SelfAnalysis({ userId }) {
             centipawn_loss: m.centipawn_loss,
             classification: m.classification,
             engine_best_move: m.engine_best_move,
+            engine_best_move_uci: m.engine_best_move_uci,
             engine_pv_san: m.engine_pv_san,
             engine_multipv: m.engine_multipv,
             patterns: m.patterns,
             explanation: m.explanation,
             eval_verdict: null,
+            user_annotation: m.user_annotation || '',
+            user_candidates: m.user_candidates || [],
+            user_eval_label: m.user_eval_label || '',
           }
+          if (m.user_squares && Object.keys(m.user_squares).length > 0)
+            restoredHighlights[m.move_index] = m.user_squares
+          if (m.user_arrows?.length > 0)
+            restoredArrows[m.move_index] = m.user_arrows
         }
         setAnnotatedMoves(preAnnotated)
+        setSquareHighlights(restoredHighlights)
+        setUserArrows(restoredArrows)
 
         // Navigate to first unannotated user move
         const annotatedSet = new Set(data.annotated_move_indices || [])
@@ -199,6 +444,7 @@ export default function SelfAnalysis({ userId }) {
   const loadSessionData = (data) => {
     setSessionId(data.session_id)
     setUserColor(data.user_color)
+    setGameResult(data.game_result || null)
     setSessionMeta({
       white_player: data.white_player,
       black_player: data.black_player,
@@ -219,6 +465,7 @@ export default function SelfAnalysis({ userId }) {
     try {
       const res = await startAnnotationSession(userId, Number(gameId), budget)
       loadSessionData(res.data)
+      setGameResult(res.data.game_result || null)
       setAnnotatedMoves({})
       setNavIdx(0)
       resetFormOnly()
@@ -238,6 +485,7 @@ export default function SelfAnalysis({ userId }) {
     setEvalLabel('')
     setConfidence(0)
     setMarkedCritical(false)
+    setDraftAnnotations({})
   }
 
   const handleSubmit = async () => {
@@ -245,16 +493,38 @@ export default function SelfAnalysis({ userId }) {
     setSubmitting(true)
     setError(null)
     try {
+      const moveIndex = currentMove.move_index
+      const currentSquares = squareHighlights[moveIndex] || {}
+      const currentUserArrows = userArrows[moveIndex] || []
       const payload = {
-        move_index: currentMove.move_index,
+        move_index: moveIndex,
         user_annotation: annotation,
         user_candidates: candidates.filter(c => c.trim()),
         user_eval_label: evalLabel,
         user_confidence: confidence,
         user_marked_critical: markedCritical,
+        user_squares: currentSquares,
+        user_arrows: currentUserArrows,
       }
       const res = await submitAnnotation(sessionId, payload)
-      setAnnotatedMoves(prev => ({ ...prev, [currentMove.move_index]: res.data }))
+      // Store engine data AND user's own annotation/visual data so the reveal panel can display them
+      setAnnotatedMoves(prev => ({
+        ...prev,
+        [moveIndex]: {
+          ...res.data,
+          user_annotation: annotation,
+          user_candidates: candidates.filter(c => c.trim()),
+          user_eval_label: evalLabel,
+          user_squares: currentSquares,
+          user_arrows: currentUserArrows,
+        },
+      }))
+      // Drop the draft for this move — it's now revealed and immutable
+      setDraftAnnotations(prev => {
+        const next = { ...prev }
+        delete next[currentMove.move_index]
+        return next
+      })
     } catch (e) {
       setError(e.response?.data?.detail || e.message)
     } finally {
@@ -262,10 +532,27 @@ export default function SelfAnalysis({ userId }) {
     }
   }
 
-  const handleComplete = async () => {
+  // Go to questionnaire phase before completing
+  const handleRequestComplete = () => {
+    setFeelings({
+      feelings: [],
+      result_reason: '',
+      key_moment: '',
+      takeaway: '',
+      would_do_differently: '',
+      plan_adherence: '',
+      time_pressure: '',
+      opening_prep: '',
+      extra_note: '',
+    })
+    setPhase('questionnaire')
+  }
+
+  const handleComplete = async (feelingsData) => {
     setLoading(true)
     try {
-      const res = await completeAnnotationSession(sessionId)
+      const res = await completeAnnotationSession(sessionId, feelingsData)
+      // Merge questionnaire_coaching into reflection so CompletePhase can access it
       setReflection(res.data)
       setPhase('complete')
     } catch (e) {
@@ -281,10 +568,46 @@ export default function SelfAnalysis({ userId }) {
     setAllGameMoves([])
     setAnnotatedMoves({})
     setReflection(null)
+    setGameResult(null)
+    setFeelings({
+      feelings: [],
+      result_reason: '',
+      key_moment: '',
+      takeaway: '',
+      would_do_differently: '',
+      plan_adherence: '',
+      time_pressure: '',
+      opening_prep: '',
+      extra_note: '',
+    })
     setCriticalOnly(false)
+    setSquareHighlights({})
+    setUserArrows({})
     resetFormOnly()
     setPhase('setup')
   }
+
+  const handleSquareRightClick = useCallback(({ square }) => {
+    const moveIndex = allGameMoves[navIdx]?.move_index
+    if (moveIndex === undefined) return
+    setSquareHighlights(prev => {
+      const curr = (prev[moveIndex] || {})[square]
+      const nextIdx = HIGHLIGHT_COLORS.indexOf(curr) + 1
+      const nextColor = HIGHLIGHT_COLORS[nextIdx]  // undefined → clear
+      const updated = { ...(prev[moveIndex] || {}) }
+      if (nextColor) updated[square] = nextColor
+      else delete updated[square]
+      return { ...prev, [moveIndex]: updated }
+    })
+  }, [allGameMoves, navIdx])
+
+  const handleArrowsChange = useCallback((newArrows) => {
+    // onArrowsChange fires with [] on mount — ignore that to avoid wiping restored arrows
+    if (!newArrows || newArrows.length === 0) return
+    const moveIndex = allGameMoves[navIdx]?.move_index
+    if (moveIndex === undefined) return
+    setUserArrows(prev => ({ ...prev, [moveIndex]: newArrows }))
+  }, [allGameMoves, navIdx])
 
   const handleCoachReview = async () => {
     if (!sessionId) return
@@ -324,13 +647,28 @@ export default function SelfAnalysis({ userId }) {
     )
   }
 
+  if (phase === 'questionnaire') {
+    return (
+      <QuestionnairePhase
+        feelings={feelings}
+        setFeelings={setFeelings}
+        gameResult={gameResult}
+        onComplete={handleComplete}
+        loading={loading}
+        error={error}
+      />
+    )
+  }
+
   if (phase === 'complete') {
     return (
       <CompletePhase
         reflection={reflection}
+        gameResult={gameResult}
         onDashboard={() => navigate('/')}
         onNewSession={handleStartNew}
         onCoachReview={handleCoachReview}
+        onReviewAnnotations={() => setPhase('annotating')}
         reviewLoading={reviewLoading}
         error={error}
       />
@@ -347,6 +685,11 @@ export default function SelfAnalysis({ userId }) {
         setReviewIdx={setReviewIdx}
         reviewResponses={reviewResponses}
         setReviewResponses={setReviewResponses}
+        showEngineArrows={showEngineArrows}
+        setShowEngineArrows={setShowEngineArrows}
+        squareHighlights={squareHighlights}
+        setSquareHighlights={setSquareHighlights}
+        userArrows={userArrows}
         onBack={() => setPhase('complete')}
         onDashboard={() => navigate('/')}
       />
@@ -399,9 +742,25 @@ export default function SelfAnalysis({ userId }) {
               /{userMoveCount} annotated
             </span>
 
+            {/* Best Lines toggle + legend */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowEngineArrows(v => !v)}
+                title={showEngineArrows ? 'Hide engine best lines' : 'Show engine best lines (after reveal)'}
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  showEngineArrows
+                    ? 'bg-green-900/50 border-green-600 text-green-300'
+                    : 'border-slate-600 text-slate-400 hover:border-green-600 hover:text-green-300'
+                }`}
+              >
+                <Cpu size={12} /> Best Lines
+              </button>
+              <BoardLegend />
+            </div>
+
             {/* Finish session */}
             <button
-              onClick={handleComplete}
+              onClick={handleRequestComplete}
               disabled={loading}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-chess-gold/50 text-chess-gold hover:bg-chess-gold/10 transition-colors disabled:opacity-50"
             >
@@ -421,18 +780,37 @@ export default function SelfAnalysis({ userId }) {
             )}
 
             <div className="rounded-xl overflow-hidden my-1">
-              {currentMove?.fen_after && (
-                <Chessboard
-                  key={currentMove.fen_after}
-                  options={{
-                    position: currentMove.fen_after,
-                    boardOrientation: sessionMeta?.user_color === 'black' ? 'black' : 'white',
-                    allowDragging: false,
-                    animationDurationInMs: 100,
-                    boardStyle: { borderRadius: '8px' },
-                  }}
-                />
-              )}
+              {currentMove && (() => {
+                // When Best Lines is on, show fen_before so arrows align with pre-move pieces
+                const boardPos = showEngineArrows ? currentMove.fen_before : currentMove.fen_after
+                const moveIndex = currentMove.move_index
+                const moveHighlights = squareHighlights[moveIndex] || {}
+                const sqStyles = Object.fromEntries(
+                  Object.entries(moveHighlights).map(([sq, c]) => [sq, { background: c }])
+                )
+                const engineArrows = showEngineArrows ? buildEngineArrows(currentReveal, currentMove) : []
+                const rawUserArrows = currentReveal?.user_arrows ?? userArrows[moveIndex]
+                const savedUserArrows = Array.isArray(rawUserArrows) ? rawUserArrows : []
+                const allArrows = [...engineArrows, ...savedUserArrows]
+                return (
+                  <Chessboard
+                    key={`${moveIndex}-${showEngineArrows ? 'before' : 'after'}`}
+                    options={{
+                      position: boardPos,
+                      boardOrientation: sessionMeta?.user_color === 'black' ? 'black' : 'white',
+                      allowDragging: false,
+                      animationDurationInMs: 100,
+                      boardStyle: { borderRadius: '8px' },
+                      allowDrawingArrows: true,
+                      arrows: allArrows,
+                      squareStyles: sqStyles,
+                      onSquareRightClick: handleSquareRightClick,
+                      onArrowsChange: handleArrowsChange,
+                      clearArrowsOnPositionChange: false,
+                    }}
+                  />
+                )
+              })()}
             </div>
 
             {sessionMeta && (
@@ -440,6 +818,20 @@ export default function SelfAnalysis({ userId }) {
                 name={sessionMeta.user_color === 'black' ? sessionMeta.black_player : sessionMeta.white_player}
                 isUser={true}
               />
+            )}
+
+            {/* Eval display — shown for every move when Best Lines is active */}
+            {showEngineArrows && currentMove && (
+              <div className="mt-1 flex items-center justify-center gap-1.5 text-xs font-mono">
+                <span className="text-slate-500">Eval:</span>
+                <span className={(currentReveal?.engine_eval_before ?? currentMove.eval_before) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                  {fmtEval(currentReveal?.engine_eval_before ?? currentMove.eval_before)}
+                </span>
+                <span className="text-slate-600">→</span>
+                <span className={(currentReveal?.engine_eval_after ?? currentMove.eval_after) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                  {fmtEval(currentReveal?.engine_eval_after ?? currentMove.eval_after)}
+                </span>
+              </div>
             )}
 
             {/* Move info */}
@@ -521,12 +913,11 @@ export default function SelfAnalysis({ userId }) {
                   <label className="text-xs text-slate-400 block mb-1">
                     What were you thinking? Why this move?
                   </label>
-                  <textarea
-                    value={annotation}
-                    onChange={e => setAnnotation(e.target.value)}
-                    rows={3}
+                  <RichTextEditor
+                    key={`editor-${currentMove?.move_index}`}
+                    defaultValue={draftAnnotations[currentMove?.move_index]?.annotation ?? annotation}
+                    onChange={setAnnotation}
                     placeholder="Describe your reasoning…"
-                    className="w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
                   />
                 </div>
 
@@ -626,6 +1017,33 @@ export default function SelfAnalysis({ userId }) {
                   <span className="font-semibold text-chess-gold">Engine Reveal</span>
                 </div>
 
+                {/* User's own annotation — persisted so it survives navigation */}
+                {(currentReveal.user_annotation || currentReveal.user_candidates?.length > 0) && (
+                  <div className="bg-chess-dark rounded-lg p-3 flex flex-col gap-2 border border-slate-700">
+                    {currentReveal.user_annotation && (
+                      <div>
+                        <div className="text-xs text-slate-500 mb-1">Your thinking</div>
+                        <div
+                          className="text-sm text-slate-300 leading-relaxed prose-chess"
+                          dangerouslySetInnerHTML={{ __html: currentReveal.user_annotation }}
+                        />
+                      </div>
+                    )}
+                    {currentReveal.user_candidates?.length > 0 && (
+                      <div>
+                        <div className="text-xs text-slate-500 mb-1">Your candidates</div>
+                        <div className="flex gap-1.5 flex-wrap">
+                          {currentReveal.user_candidates.map((c, i) => (
+                            <span key={i} className="text-xs font-mono px-2 py-0.5 rounded border border-slate-600 text-slate-300 bg-chess-panel">
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {currentReveal.eval_verdict && (
                   <div className="text-sm">
                     <span className="text-slate-400">Your assessment: </span>
@@ -652,21 +1070,27 @@ export default function SelfAnalysis({ userId }) {
                   />
                 </div>
 
-                {currentReveal.engine_pv_san?.length > 0 && (
-                  <div className="bg-chess-dark rounded-lg px-3 py-2 text-xs font-mono text-slate-300">
-                    <span className="text-slate-500">Line: </span>
-                    {currentReveal.engine_pv_san.join(' ')}
+                {/* Eval before → after in pawn units */}
+                {currentReveal.engine_eval_before != null && currentReveal.engine_eval_after != null && (
+                  <div className="flex items-center gap-1.5 text-xs font-mono text-slate-500">
+                    <span>Eval:</span>
+                    <span className={currentReveal.engine_eval_before >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(currentReveal.engine_eval_before)}
+                    </span>
+                    <span className="text-slate-600">→</span>
+                    <span className={currentReveal.engine_eval_after >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(currentReveal.engine_eval_after)}
+                    </span>
                   </div>
                 )}
 
                 {currentReveal.engine_multipv?.length > 0 && (
                   <div className="flex flex-col gap-1">
-                    <div className="text-xs text-slate-500 mb-0.5">Top engine lines</div>
                     {currentReveal.engine_multipv.map((line, i) => (
                       <div key={i} className="bg-chess-dark rounded-lg px-3 py-1.5 text-xs font-mono text-slate-300 flex gap-2 items-baseline">
                         <span className="text-slate-500 w-3">{line.rank}.</span>
                         <span className="text-chess-gold font-bold w-10">{line.move_san}</span>
-                        <span className="text-slate-500">{line.score_cp > 0 ? '+' : ''}{line.score_cp}</span>
+                        <span className="text-slate-500 w-10">{fmtEval(line.score_cp)}</span>
                         <span className="text-slate-400 truncate">{line.pv_san?.join(' ')}</span>
                       </div>
                     ))}
@@ -696,6 +1120,242 @@ export default function SelfAnalysis({ userId }) {
                 {error}
               </div>
             )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Questionnaire Phase ────────────────────────────────────────────────────────
+
+const FEELING_TAGS = [
+  'Focused', 'Confident', 'Prepared',
+  'Nervous', 'Tired', 'Rushed',
+  'Tilted', 'Unprepared', 'Pressured',
+  'Lucky', 'Unlucky',
+]
+
+const PLAN_OPTIONS = [
+  { value: 'always', label: 'Always' },
+  { value: 'mostly', label: 'Mostly' },
+  { value: 'reacting', label: 'Mostly reacting' },
+  { value: 'no_plan', label: 'No plan' },
+]
+
+const TIME_PRESSURE_OPTIONS = [
+  { value: 'not_at_all', label: 'Not at all' },
+  { value: 'slightly', label: 'Slightly' },
+  { value: 'significantly', label: 'Significantly' },
+]
+
+const OPENING_PREP_OPTIONS = [
+  { value: 'solid', label: 'Solid' },
+  { value: 'ok', label: 'Acceptable' },
+  { value: 'poor', label: 'Poor' },
+  { value: 'winging_it', label: 'Winging it' },
+]
+
+function RadioPills({ options, value, onChange }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map(opt => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(value === opt.value ? '' : opt.value)}
+          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+            value === opt.value
+              ? 'bg-chess-gold text-chess-dark border-chess-gold font-semibold'
+              : 'border-slate-600 text-slate-400 hover:border-chess-gold hover:text-white'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function QSection({ title, children }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 pb-1 border-b border-slate-700">
+        {title}
+      </div>
+      <div className="flex flex-col gap-4">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function QField({ label, required, children }) {
+  return (
+    <div>
+      <label className="text-sm text-slate-300 block mb-1.5">
+        {label}
+        {!required && <span className="text-slate-600 text-xs ml-1">(optional)</span>}
+      </label>
+      {children}
+    </div>
+  )
+}
+
+function QuestionnairePhase({ feelings, setFeelings, gameResult, onComplete, loading, error }) {
+  const resultWord = gameResult === 'win' ? 'won' : gameResult === 'loss' ? 'lost' : gameResult === 'draw' ? 'drew' : null
+  const resultPhrase = resultWord ? `you ${resultWord}` : 'this result'
+
+  const toggleTag = (tag) => {
+    setFeelings(prev => ({
+      ...prev,
+      feelings: prev.feelings.includes(tag)
+        ? prev.feelings.filter(t => t !== tag)
+        : [...prev.feelings, tag],
+    }))
+  }
+
+  const set = (field) => (e) => setFeelings(prev => ({ ...prev, [field]: e.target.value }))
+  const setRadio = (field) => (val) => setFeelings(prev => ({ ...prev, [field]: val }))
+
+  const hasRequired = feelings.result_reason.trim() && feelings.takeaway.trim() && feelings.plan_adherence && feelings.time_pressure && feelings.opening_prep
+
+  const buildPayload = () => {
+    const out = {}
+    if (feelings.feelings.length > 0) out.feelings = feelings.feelings
+    if (feelings.result_reason.trim()) out.result_reason = feelings.result_reason.trim()
+    if (feelings.key_moment.trim()) out.key_moment = feelings.key_moment.trim()
+    if (feelings.takeaway.trim()) out.takeaway = feelings.takeaway.trim()
+    if (feelings.would_do_differently.trim()) out.would_do_differently = feelings.would_do_differently.trim()
+    if (feelings.plan_adherence) out.plan_adherence = feelings.plan_adherence
+    if (feelings.time_pressure) out.time_pressure = feelings.time_pressure
+    if (feelings.opening_prep) out.opening_prep = feelings.opening_prep
+    if (feelings.extra_note.trim()) out.extra_note = feelings.extra_note.trim()
+    return Object.keys(out).length > 0 ? out : null
+  }
+
+  const textareaClass = "w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
+
+  return (
+    <div className="min-h-screen bg-chess-dark p-6">
+      <div className="max-w-xl mx-auto">
+        <div className="bg-chess-panel rounded-xl p-6">
+          <h2 className="text-xl font-bold text-chess-gold mb-1">Reflect on This Game</h2>
+          <p className="text-slate-400 text-sm mb-6">
+            Answer a few questions — the coach will compare your self-assessment to the engine data.
+          </p>
+
+          <div className="flex flex-col gap-6">
+
+            {/* Section 1: Outcome */}
+            <QSection title="Outcome">
+              <QField label={`What was the main reason ${resultPhrase}?`} required>
+                <textarea
+                  value={feelings.result_reason}
+                  onChange={set('result_reason')}
+                  rows={3}
+                  placeholder="Describe what you think decided the game…"
+                  className={textareaClass}
+                />
+              </QField>
+              <QField label="Was there a specific moment where the game turned?">
+                <textarea
+                  value={feelings.key_moment}
+                  onChange={set('key_moment')}
+                  rows={2}
+                  placeholder="e.g. After Bxh7+ I panicked and spent 8 minutes…"
+                  className={textareaClass}
+                />
+              </QField>
+            </QSection>
+
+            {/* Section 2: Your Process */}
+            <QSection title="Your Process">
+              <QField label="Were you following a clear plan?" required>
+                <RadioPills options={PLAN_OPTIONS} value={feelings.plan_adherence} onChange={setRadio('plan_adherence')} />
+              </QField>
+              <QField label="Did time pressure affect your decisions?" required>
+                <RadioPills options={TIME_PRESSURE_OPTIONS} value={feelings.time_pressure} onChange={setRadio('time_pressure')} />
+              </QField>
+              <QField label="How was your opening preparation?" required>
+                <RadioPills options={OPENING_PREP_OPTIONS} value={feelings.opening_prep} onChange={setRadio('opening_prep')} />
+              </QField>
+            </QSection>
+
+            {/* Section 3: Learning */}
+            <QSection title="Learning">
+              <QField label="What's your #1 takeaway from this game?" required>
+                <textarea
+                  value={feelings.takeaway}
+                  onChange={set('takeaway')}
+                  rows={2}
+                  placeholder="The most important thing you learned…"
+                  className={textareaClass}
+                />
+              </QField>
+              <QField label="If you could replay this game, what would you change?">
+                <textarea
+                  value={feelings.would_do_differently}
+                  onChange={set('would_do_differently')}
+                  rows={2}
+                  placeholder="A specific decision or approach you'd do differently…"
+                  className={textareaClass}
+                />
+              </QField>
+            </QSection>
+
+            {/* Section 4: Feelings */}
+            <QSection title="Feelings">
+              <QField label="How did you feel?">
+                <div className="flex flex-wrap gap-2">
+                  {FEELING_TAGS.map(tag => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => toggleTag(tag)}
+                      className={`text-sm px-3 py-1.5 rounded-full border transition-colors ${
+                        feelings.feelings.includes(tag)
+                          ? 'bg-chess-gold text-chess-dark border-chess-gold font-semibold'
+                          : 'border-slate-600 text-slate-400 hover:border-chess-gold hover:text-white'
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </QField>
+              <QField label="Extra note">
+                <textarea
+                  value={feelings.extra_note}
+                  onChange={set('extra_note')}
+                  rows={2}
+                  placeholder="Anything else about how you played today…"
+                  className={textareaClass}
+                />
+              </QField>
+            </QSection>
+
+          </div>
+
+          {error && (
+            <div className="p-2 bg-red-900/40 border border-red-700 rounded-lg text-red-300 text-xs mt-4">{error}</div>
+          )}
+
+          <div className="flex items-center gap-3 mt-6">
+            <button
+              onClick={() => onComplete(buildPayload())}
+              disabled={loading || !hasRequired}
+              className="flex-1 bg-chess-gold text-chess-dark font-bold py-2.5 rounded-xl hover:opacity-90 disabled:opacity-50"
+            >
+              {loading ? 'Saving…' : 'Finish Session'}
+            </button>
+            <button
+              onClick={() => onComplete(null)}
+              disabled={loading}
+              className="text-slate-500 text-sm hover:text-white px-3 transition-colors disabled:opacity-50"
+            >
+              Skip
+            </button>
           </div>
         </div>
       </div>
@@ -769,7 +1429,9 @@ function SetupPhase({ timeBudget, setTimeBudget, customBudget, setCustomBudget, 
 
 // ── Complete Phase ────────────────────────────────────────────────────────────
 
-function CompletePhase({ reflection, onDashboard, onNewSession, onCoachReview, reviewLoading, error }) {
+function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCoachReview, onReviewAnnotations, reviewLoading, error }) {
+  const [reflectionsOpen, setReflectionsOpen] = useState(false)
+
   if (!reflection) {
     return (
       <div className="min-h-screen bg-chess-dark flex items-center justify-center">
@@ -784,6 +1446,23 @@ function CompletePhase({ reflection, onDashboard, onNewSession, onCoachReview, r
     { name: 'Tactical Awareness', value: reflection.tactical_awareness_score, color: '#60a5fa' },
     { name: 'Confidence Cal.', value: reflection.confidence_calibration_score, color: '#f472b6' },
   ]
+
+  const q = reflection.game_feelings || {}
+  const resultWord = gameResult === 'win' ? 'won' : gameResult === 'loss' ? 'lost' : gameResult === 'draw' ? 'drew' : null
+
+  // Build label→value pairs for filled questionnaire fields
+  const reflectionRows = [
+    { label: `Why you ${resultWord || 'played'}`, value: q.result_reason },
+    { label: 'Key turning point', value: q.key_moment },
+    { label: 'Takeaway', value: q.takeaway },
+    { label: 'Would do differently', value: q.would_do_differently },
+    { label: 'Plan adherence', value: q.plan_adherence?.replace('_', ' ') },
+    { label: 'Time pressure', value: q.time_pressure?.replace('_', ' ') },
+    { label: 'Opening prep', value: q.opening_prep?.replace('_', ' ') },
+    { label: 'Extra note', value: q.extra_note },
+  ].filter(r => r.value && String(r.value).trim())
+
+  const feelingTags = q.feelings || []
 
   return (
     <div className="min-h-screen bg-chess-dark p-6">
@@ -830,6 +1509,53 @@ function CompletePhase({ reflection, onDashboard, onNewSession, onCoachReview, r
           </div>
         )}
 
+        {/* Coach on Your Reflection — LLM questionnaire analysis */}
+        {reflection.questionnaire_coaching && (
+          <div className="bg-chess-panel rounded-xl p-4 mb-6 border border-chess-gold/20">
+            <div className="flex items-center gap-2 mb-3">
+              <MessageSquare size={16} className="text-chess-gold" />
+              <h3 className="text-sm font-semibold text-chess-gold">Coach on Your Reflection</h3>
+            </div>
+            <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
+              {reflection.questionnaire_coaching}
+            </p>
+          </div>
+        )}
+
+        {/* Your Reflections — collapsible */}
+        {(reflectionRows.length > 0 || feelingTags.length > 0) && (
+          <div className="bg-chess-panel rounded-xl p-4 mb-6">
+            <button
+              onClick={() => setReflectionsOpen(v => !v)}
+              className="w-full flex items-center justify-between text-sm font-semibold text-slate-300 hover:text-white transition-colors"
+            >
+              <span>Your Reflections</span>
+              <span className="text-slate-500 text-xs">{reflectionsOpen ? '▴' : '▾'}</span>
+            </button>
+
+            {reflectionsOpen && (
+              <div className="mt-3 flex flex-col gap-2.5">
+                {feelingTags.length > 0 && (
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1">Feelings</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {feelingTags.map((tag, i) => (
+                        <span key={i} className="text-xs px-2.5 py-1 rounded-full bg-slate-700 text-slate-200">{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {reflectionRows.map((row, i) => (
+                  <div key={i}>
+                    <div className="text-xs text-slate-500 mb-0.5">{row.label}</div>
+                    <p className="text-sm text-slate-300 italic">"{row.value}"</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Coach Review CTA */}
         <div className="bg-chess-panel rounded-xl p-4 mb-6 border border-slate-700">
           <div className="flex items-start gap-3">
@@ -857,12 +1583,15 @@ function CompletePhase({ reflection, onDashboard, onNewSession, onCoachReview, r
           </div>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
           <button onClick={onDashboard} className="flex-1 bg-slate-700 text-white font-semibold py-3 rounded-xl hover:bg-slate-600 transition-colors">
             Back to Dashboard
           </button>
+          <button onClick={onReviewAnnotations} className="flex-1 border border-chess-gold/50 text-chess-gold hover:bg-chess-gold/10 font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
+            <PenLine size={15} /> Review Annotations
+          </button>
           <button onClick={onNewSession} className="flex-1 border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 font-semibold py-3 rounded-xl transition-colors">
-            Start New Session
+            New Session
           </button>
         </div>
       </div>
@@ -922,7 +1651,11 @@ function findCollapseIdx(items) {
 
 function CoachReviewPhase({
   sessionId, userColor, items, reviewIdx, setReviewIdx,
-  reviewResponses, setReviewResponses, onBack, onDashboard,
+  reviewResponses, setReviewResponses,
+  showEngineArrows, setShowEngineArrows,
+  squareHighlights, setSquareHighlights,
+  userArrows,
+  onBack, onDashboard,
 }) {
   const [responseText, setResponseText] = useState('')
   const [replying, setReplying] = useState(false)
@@ -932,6 +1665,20 @@ function CoachReviewPhase({
   const item = items[reviewIdx] || null
   const moveKey = item?.move_index
   const currentResponse = reviewResponses[moveKey] || {}
+
+  const handleCoachSquareRightClick = useCallback(({ square }) => {
+    const mi = item?.move_index
+    if (mi === undefined) return
+    setSquareHighlights(prev => {
+      const curr = (prev[mi] || {})[square]
+      const nextIdx = HIGHLIGHT_COLORS.indexOf(curr) + 1
+      const nextColor = HIGHLIGHT_COLORS[nextIdx]
+      const updated = { ...(prev[mi] || {}) }
+      if (nextColor) updated[square] = nextColor
+      else delete updated[square]
+      return { ...prev, [mi]: updated }
+    })
+  }, [item?.move_index, setSquareHighlights])
 
   // Collapse index (memoised — stable for this review session)
   const collapseIdx = items.length > 0 ? findCollapseIdx(items) : null
@@ -1014,6 +1761,19 @@ function CoachReviewPhase({
               <span className="text-xs text-slate-500">{reviewIdx + 1} / {items.length}</span>
             </div>
 
+            {/* Best Lines toggle */}
+            <button
+              onClick={() => setShowEngineArrows(v => !v)}
+              title={showEngineArrows ? 'Hide engine best lines' : 'Show engine best lines'}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                showEngineArrows
+                  ? 'bg-green-900/50 border-green-600 text-green-300'
+                  : 'border-slate-600 text-slate-400 hover:border-green-600 hover:text-green-300'
+              }`}
+            >
+              <Cpu size={12} /> Best Lines
+            </button>
+
             {/* Collapse finder button */}
             {collapseIdx !== null && (
               <button
@@ -1064,18 +1824,33 @@ function CoachReviewPhase({
           {/* ── Left: Board ── */}
           <div>
             <div className="rounded-xl overflow-hidden">
-              {item.fen_before && (
-                <Chessboard
-                  key={item.fen_before}
-                  options={{
-                    position: item.fen_before,
-                    boardOrientation: userColor === 'black' ? 'black' : 'white',
-                    allowDragging: false,
-                    animationDurationInMs: 100,
-                    boardStyle: { borderRadius: '8px' },
-                  }}
-                />
-              )}
+              {item.fen_before && (() => {
+                const coachHighlights = squareHighlights[item.move_index] || {}
+                const sqStyles = Object.fromEntries(
+                  Object.entries(coachHighlights).map(([sq, c]) => [sq, { background: c }])
+                )
+                const engineArrows = showEngineArrows ? buildEngineArrows(item, item) : []
+                const rawUserArrows = item.user_arrows ?? userArrows[item.move_index]
+                const savedUserArrows = Array.isArray(rawUserArrows) ? rawUserArrows : []
+                const allArrows = [...engineArrows, ...savedUserArrows]
+                return (
+                  <Chessboard
+                    key={`coach-${item.move_index}`}
+                    options={{
+                      position: item.fen_before,
+                      boardOrientation: userColor === 'black' ? 'black' : 'white',
+                      allowDragging: false,
+                      animationDurationInMs: 100,
+                      boardStyle: { borderRadius: '8px' },
+                      allowDrawingArrows: true,
+                      arrows: allArrows,
+                      squareStyles: sqStyles,
+                      onSquareRightClick: handleCoachSquareRightClick,
+                      clearArrowsOnPositionChange: false,
+                    }}
+                  />
+                )
+              })()}
             </div>
 
             {/* Move label */}
@@ -1091,17 +1866,16 @@ function CoachReviewPhase({
                 </span>
                 <EvalVerdictBadge verdict={item.eval_verdict} />
               </div>
-              {/* Eval delta bar */}
+              {/* Eval delta */}
               {item.engine_eval_before != null && item.engine_eval_after != null && (
-                <div className="mt-1.5 flex items-center justify-center gap-2 text-xs text-slate-500">
+                <div className="mt-1.5 flex items-center justify-center gap-1.5 text-xs font-mono">
                   <span className={item.engine_eval_before >= 0 ? 'text-green-400' : 'text-red-400'}>
-                    {item.engine_eval_before > 0 ? '+' : ''}{Math.round(item.engine_eval_before)}
+                    {fmtEval(item.engine_eval_before)}
                   </span>
                   <span className="text-slate-600">→</span>
                   <span className={item.engine_eval_after >= 0 ? 'text-green-400' : 'text-red-400'}>
-                    {item.engine_eval_after > 0 ? '+' : ''}{Math.round(item.engine_eval_after)}
+                    {fmtEval(item.engine_eval_after)}
                   </span>
-                  <span className="text-slate-600">cp</span>
                 </div>
               )}
             </div>
@@ -1120,7 +1894,7 @@ function CoachReviewPhase({
                       <div key={i} className="flex gap-2 text-xs font-mono text-slate-400">
                         <span className="text-slate-600 w-3">{line.rank}.</span>
                         <span className="text-chess-gold font-bold w-10">{line.move_san}</span>
-                        <span className="text-slate-500">{line.score_cp > 0 ? '+' : ''}{line.score_cp}</span>
+                        <span className="text-slate-500 w-10">{fmtEval(line.score_cp)}</span>
                         <span className="truncate">{line.pv_san?.join(' ')}</span>
                       </div>
                     ))}
@@ -1183,7 +1957,10 @@ function CoachReviewPhase({
             {item.user_annotation && (
               <div className="bg-chess-panel rounded-xl p-4">
                 <div className="text-xs text-slate-500 mb-1.5 uppercase tracking-wide">Your annotation</div>
-                <p className="text-sm text-slate-300 italic leading-relaxed">"{item.user_annotation}"</p>
+                <div
+                  className="text-sm text-slate-300 italic leading-relaxed prose-chess"
+                  dangerouslySetInnerHTML={{ __html: `"${item.user_annotation}"` }}
+                />
                 {item.user_candidates?.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <span className="text-xs text-slate-500">Candidates:</span>
@@ -1204,9 +1981,23 @@ function CoachReviewPhase({
 
             {/* Coach comment */}
             <div className="bg-chess-panel rounded-xl p-4 border border-chess-gold/20">
-              <div className="flex items-center gap-2 mb-2">
-                <MessageSquare size={15} className="text-chess-gold" />
-                <span className="text-sm font-semibold text-chess-gold">Coach</span>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <MessageSquare size={15} className="text-chess-gold" />
+                  <span className="text-sm font-semibold text-chess-gold">Coach</span>
+                </div>
+                {/* Eval before → after */}
+                {item.engine_eval_before != null && item.engine_eval_after != null && (
+                  <div className="flex items-center gap-1 text-xs font-mono">
+                    <span className={item.engine_eval_before >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(item.engine_eval_before)}
+                    </span>
+                    <span className="text-slate-600">→</span>
+                    <span className={item.engine_eval_after >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(item.engine_eval_after)}
+                    </span>
+                  </div>
+                )}
               </div>
               <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
                 {item.coach_comment}

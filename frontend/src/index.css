@@ -22,3 +22,16 @@ body {
 .move-inaccuracy { color: #facc15; }
 .move-mistake    { color: #fb923c; }
 .move-blunder    { color: #ef4444; }
+
+/* Rich text editor content */
+.prose-chess b, .prose-chess strong { font-weight: 600; color: #f0d9b5; }
+.prose-chess i, .prose-chess em { font-style: italic; }
+.prose-chess ul { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0; }
+.prose-chess li { margin: 0.1rem 0; }
+
+/* Contenteditable placeholder */
+[contenteditable][data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: #64748b;
+  pointer-events: none;
+}
