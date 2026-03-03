@@ -84,3 +84,6 @@ export const getCoachReview = (sessionId) =>
 
 export const submitCoachReviewReply = (sessionId, payload) =>
   api.post(`/selfanalysis/session/${sessionId}/coach-review/reply`, payload)
+
+export const listUserSessions = (userId) =>
+  api.get(`/selfanalysis/user/${userId}/sessions`)

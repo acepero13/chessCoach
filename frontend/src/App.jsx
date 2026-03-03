@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import CoachingSession from './pages/CoachingSession'
 import TrainingPlan from './pages/TrainingPlan'
 import SelfAnalysis from './pages/SelfAnalysis'
+import ReviewedGames from './pages/ReviewedGames'
 
 export default function App() {
   const [userId, setUserIdState] = useState(() => {
@@ -42,6 +43,10 @@ export default function App() {
         <Route
           path="/self-analysis/:gameId"
           element={<SelfAnalysis userId={userId} />}
+        />
+        <Route
+          path="/reviewed-games"
+          element={<ReviewedGames userId={userId} />}
         />
       </Routes>
     </BrowserRouter>

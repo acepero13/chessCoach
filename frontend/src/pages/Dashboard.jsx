@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, Target, Calendar, RefreshCw, ChevronRight, PenLine } from 'lucide-react'
+import { BookOpen, Target, Calendar, RefreshCw, ChevronRight, PenLine, History } from 'lucide-react'
 import ScoreRadar from '../components/ScoreRadar'
 import GameImport from '../components/GameImport'
 import GameList from '../components/GameList'
@@ -138,10 +138,10 @@ export default function Dashboard({ userId, username, setUser }) {
               onClick={() => navigate('/training')}
             />
             <ActionCard
-              icon={<Target size={20} />}
-              title="View Analysis"
-              description={`${analyzedCount} games analyzed at depth 18`}
-              onClick={() => setTab('games')}
+              icon={<History size={20} />}
+              title="Reviewed Games"
+              description="See all your self-analysis sessions and scores"
+              onClick={() => navigate('/reviewed-games')}
             />
           </div>
         )}

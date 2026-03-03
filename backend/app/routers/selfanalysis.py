@@ -336,6 +336,7 @@ async def annotate_move(
         "engine_multipv": engine_multipv,
         "patterns": patterns,
         "explanation": "",
+        "draft": False,   # explicitly mark as submitted so save-draft can never overwrite it
     }
 
     moves_data = list(session.moves_data or [])
@@ -425,10 +426,10 @@ async def save_draft(
 
     if req.move_index in existing_idx_map:
         pos = existing_idx_map[req.move_index]
-        if moves_data[pos].get("draft", True):
+        if moves_data[pos].get("draft", False):
             # Replace existing draft entry
             moves_data[pos] = draft_entry
-        # If already submitted (no draft flag), leave it untouched
+        # If already submitted (draft key absent or False), leave it untouched
     else:
         moves_data.append(draft_entry)
 
@@ -815,3 +816,59 @@ async def get_latest_session_for_game(
         "game_feelings": session.game_feelings,
         "questionnaire_coaching": session.questionnaire_coaching,
     }
+
+
+@router.get("/user/{user_id}/sessions")
+async def list_user_sessions(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List all annotation sessions for a user, newest first.
+    Returns summary cards suitable for a history view.
+    """
+    sessions_result = await db.execute(
+        select(AnnotationSession)
+        .where(AnnotationSession.user_id == user_id)
+        .order_by(desc(AnnotationSession.started_at))
+    )
+    sessions = sessions_result.scalars().all()
+
+    items = []
+    for s in sessions:
+        game_result = await db.execute(select(Game).where(Game.id == s.game_id))
+        game = game_result.scalar_one_or_none()
+        if not game:
+            continue
+
+        moves_data = s.moves_data or []
+        submitted = [m for m in moves_data if not m.get("draft", False)]
+        reflection = s.reflection or {}
+
+        pattern_counts: dict[str, int] = {}
+        for m in submitted:
+            for p in (m.get("patterns") or []):
+                ptype = p.get("type", "")
+                if ptype:
+                    pattern_counts[ptype] = pattern_counts.get(ptype, 0) + 1
+
+        items.append({
+            "session_id": s.id,
+            "game_id": s.game_id,
+            "white_player": game.white_player,
+            "black_player": game.black_player,
+            "user_color": game.user_color,
+            "game_result": game.result.value if game.result else None,
+            "completed": s.completed,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+            "moves_reviewed": len(submitted),
+            "total_user_moves": len(s.focused_move_indices or []),
+            "eval_accuracy_score": reflection.get("eval_accuracy_score"),
+            "candidate_quality_score": reflection.get("candidate_quality_score"),
+            "tactical_awareness_score": reflection.get("tactical_awareness_score"),
+            "confidence_calibration_score": reflection.get("confidence_calibration_score"),
+            "top_patterns": sorted(pattern_counts.items(), key=lambda x: -x[1])[:3],
+        })
+
+    return {"sessions": items, "total": len(items)}
