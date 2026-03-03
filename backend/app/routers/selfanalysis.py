@@ -9,8 +9,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Optional, Any
 
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -152,6 +152,19 @@ class StartAnnotationRequest(BaseModel):
     time_budget_minutes: int = 30
 
 
+class SaveDraftRequest(BaseModel):
+    move_index: int
+    user_annotation: str = ""
+    user_candidates: list[str] = Field(default_factory=list)
+    user_eval_label: str = ""
+    user_confidence: int = 0
+    user_marked_critical: bool = False
+    user_squares: dict[str, Any] = Field(default_factory=dict)
+    user_arrows: list[dict[str, Any]] = Field(default_factory=list)
+    signal_flags: dict[str, Any] = Field(default_factory=dict)
+    mistake_reason: str = ""
+
+
 class AnnotateRequest(BaseModel):
     move_index: int
     user_annotation: str = ""
@@ -159,8 +172,10 @@ class AnnotateRequest(BaseModel):
     user_eval_label: str = ""       # "winning"/"better"/"equal"/"worse"/"losing"
     user_confidence: int = 0        # 1–5, 0 = not set
     user_marked_critical: bool = False
-    user_squares: dict = {}         # { square: cssColor } — right-click highlights
-    user_arrows: list[dict] = []    # [{ startSquare, endSquare, color }] — drawn arrows
+    user_squares: dict[str, Any] = Field(default_factory=dict)   # { square: cssColor }
+    user_arrows: list[dict[str, Any]] = Field(default_factory=list)  # [{startSquare, endSquare, color}]
+    signal_flags: dict[str, Any] = Field(default_factory=dict)   # { lpdo, geometry, kingSafety }
+    mistake_reason: str = ""        # "tactical_blindness"/"laziness"/"impatience"/"noise_overload"
 
 
 # ──────────────────────────────────────────────
@@ -309,6 +324,8 @@ async def annotate_move(
         "user_marked_critical": req.user_marked_critical,
         "user_squares": req.user_squares,
         "user_arrows": req.user_arrows,
+        "signal_flags": req.signal_flags,
+        "mistake_reason": req.mistake_reason,
         "engine_eval_before": engine_eval_before,
         "engine_eval_after": engine_eval_after,
         "centipawn_loss": centipawn_loss,
@@ -371,6 +388,56 @@ async def annotate_move(
     }
 
 
+@router.post("/session/{session_id}/save-draft")
+async def save_draft(
+    session_id: int,
+    req: SaveDraftRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Persist annotation form data without triggering engine analysis.
+    Called automatically on navigation (fire-and-forget from the frontend).
+    Never overwrites a submitted (non-draft) move entry.
+    """
+    session_result = await db.execute(
+        select(AnnotationSession).where(AnnotationSession.id == session_id)
+    )
+    session = session_result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    moves_data = list(session.moves_data or [])
+    existing_idx_map = {m["move_index"]: i for i, m in enumerate(moves_data)}
+
+    draft_entry = {
+        "move_index": req.move_index,
+        "user_annotation": req.user_annotation,
+        "user_candidates": req.user_candidates,
+        "user_eval_label": req.user_eval_label,
+        "user_confidence": req.user_confidence,
+        "user_marked_critical": req.user_marked_critical,
+        "user_squares": req.user_squares,
+        "user_arrows": req.user_arrows,
+        "signal_flags": req.signal_flags,
+        "mistake_reason": req.mistake_reason,
+        "draft": True,
+    }
+
+    if req.move_index in existing_idx_map:
+        pos = existing_idx_map[req.move_index]
+        if moves_data[pos].get("draft", True):
+            # Replace existing draft entry
+            moves_data[pos] = draft_entry
+        # If already submitted (no draft flag), leave it untouched
+    else:
+        moves_data.append(draft_entry)
+
+    session.moves_data = moves_data
+    flag_modified(session, "moves_data")
+    await db.commit()
+    return {"ok": True}
+
+
 class CompleteSessionRequest(BaseModel):
     game_feelings: Optional[dict] = None   # {tags: list[str], note: str}
 
@@ -392,7 +459,7 @@ async def complete_session(
         raise HTTPException(status_code=404, detail="Session not found")
 
     moves_data = session.moves_data or []
-    annotated = [m for m in moves_data]  # all stored entries were submitted (not skipped)
+    annotated = [m for m in moves_data if not m.get("draft", False)]  # exclude unsaved drafts
 
     # ── Eval accuracy (0–100) ──
     eval_scores = []
@@ -651,8 +718,12 @@ async def get_coach_review(
             "coach_comment": comment,
         }
 
+    # Exclude unsaved drafts — only review fully submitted moves
+    submitted_moves = [m for m in moves_data if not m.get("draft", False)]
+    if not submitted_moves:
+        return {"review_items": [], "total": 0}
     # Run all LLM calls concurrently (they queue on the local GPU but don't block the loop)
-    review_items = await asyncio.gather(*[build_item(m) for m in moves_data])
+    review_items = await asyncio.gather(*[build_item(m) for m in submitted_moves])
 
     return {"review_items": list(review_items), "total": len(review_items)}
 
@@ -723,7 +794,8 @@ async def get_latest_session_for_game(
         session.time_budget_minutes / max(1, total_user_moves), 1
     )
     moves_data = session.moves_data or []
-    annotated_move_indices = [m["move_index"] for m in moves_data]
+    # Only count truly submitted (non-draft) entries as annotated
+    annotated_move_indices = [m["move_index"] for m in moves_data if not m.get("draft", False)]
 
     return {
         "session_id": session.id,

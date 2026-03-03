@@ -71,6 +71,7 @@ class RawMetrics:
 
     # --- Defense ---
     blunders_under_pressure: int = 0    # blunders when eval_before < -150
+    mistakes_under_pressure: int = 0    # mistakes when eval_before < -150
     moves_under_pressure: int = 0       # all moves when eval_before < -150
 
     # --- Opening (accuracy of first 10 moves, Lichess win-prob formula) ---
@@ -79,10 +80,11 @@ class RawMetrics:
     opening_mistakes: int = 0
     opening_moves_total: int = 0
 
-    # --- Strategy — K (King safety): castling timing only ---
+    # --- Strategy — K (King safety): castling timing + never-castled penalty ---
     user_blunders: int = 0              # user's blunders (informational, not used in K)
     user_moves_total: int = 0           # user's total moves
     castling_early_games: int = 0       # games where user castled by move 15
+    games_never_castled: int = 0        # games where user never castled at all
 
     # --- Strategy — M (Material): user-only centipawn loss ---
     user_cp_loss_sum: float = 0.0       # sum of user's cp losses
@@ -107,6 +109,10 @@ class RawMetrics:
     # --- Tactics (Lichess-style: user response after opponent blunder) ---
     tactical_moments_found: int = 0
     tactical_moments_missed: int = 0
+
+    # --- Tactics (proactive: missed patterns + shots found by user) ---
+    proactive_tactics_found: int = 0    # tactical_shot_found patterns
+    proactive_tactics_missed: int = 0   # missed_fork/pin/checkmate/hanging patterns
 
     # --- Time management ---
     has_time_data: bool = False
@@ -142,22 +148,26 @@ def compute_attack_score(m: RawMetrics) -> float:
         return 50.0
 
     execution_rate = m.attacking_moves_good / m.attacking_moves_total
-    eval_quality = _clamp(m.avg_eval_gain_attacking / 2.0, 0, 40)  # 80cp avg → 40pts
+    # Reduced from max 40 → max 20: eval gain is noisy and risks double-counting
+    # with execution_rate (good moves raise both). Execution rate gets more weight.
+    eval_quality = _clamp(m.avg_eval_gain_attacking / 4.0, 0, 20)  # 80cp avg → 20pts
     mate_bonus = min(10.0, m.mate_threats_created * 2.0)
 
-    score = execution_rate * 50 + eval_quality + mate_bonus
+    score = execution_rate * 70 + eval_quality + mate_bonus
     return _clamp(score)
 
 
 def compute_defense_score(m: RawMetrics) -> float:
     """
-    How well the player avoids blunders when under real pressure (eval < -150cp).
+    How well the player avoids errors when under real pressure (eval < -150cp).
+    Blunders count fully; mistakes count at half weight (they still matter under pressure).
     """
     if m.moves_under_pressure == 0:
         return 50.0
 
-    blunder_rate = m.blunders_under_pressure / m.moves_under_pressure
-    score = (1.0 - blunder_rate) * 100
+    weighted_errors = m.blunders_under_pressure + 0.5 * m.mistakes_under_pressure
+    weighted_error_rate = weighted_errors / m.moves_under_pressure
+    score = (1.0 - weighted_error_rate) * 100
     return _clamp(score)
 
 
@@ -189,11 +199,12 @@ def compute_strategy_score(m: RawMetrics) -> float:
     if m.games_analyzed == 0:
         return 50.0
 
-    # K — King safety (structural: early castling = safe king shelter)
-    # Blunder rate is NOT king safety — it's already captured in M (material accuracy).
-    # 45 base (neutral: delaying castling isn't always wrong), +45 for 100% early castling.
+    # K — King safety: early castling rewarded; never castling penalized.
+    # Base 50 = neutral (late castlers who always castled get 50, which is fair —
+    # delaying castling is sometimes correct). Never-castled games get a real penalty.
     castling_rate = m.castling_early_games / m.games_analyzed
-    k_score = _clamp(45.0 + castling_rate * 45.0)
+    never_castled_rate = m.games_never_castled / m.games_analyzed
+    k_score = _clamp(50.0 + castling_rate * 30.0 - never_castled_rate * 40.0)
 
     # M — Material (user-only avg cp loss)
     if m.user_moves_total > 0:
@@ -203,15 +214,16 @@ def compute_strategy_score(m: RawMetrics) -> float:
     else:
         m_score = 50.0
 
-    # S — Space (positional drift)
+    # S — Space (positional drift): reduced penalty coefficient so dynamic/maneuvering
+    # players aren't over-penalized. Drift threshold was also raised to 150cp in detector.
     drift_per_game = m.strategic_drifts / m.games_analyzed
-    s_score = _clamp(100.0 - drift_per_game * 12.0)
+    s_score = _clamp(100.0 - drift_per_game * 8.0)
 
     # P — Pawn structure + weak squares
     pawn_per_game = m.pawn_structure_errors / m.games_analyzed
     weak_per_game = m.weak_square_creations / m.games_analyzed
-    pawn_score = _clamp(100.0 - pawn_per_game * 20.0)  # 0 errors=100, 5/game=0
-    weak_score = _clamp(100.0 - weak_per_game * 10.0)  # 0 errors=100, 10/game=0
+    pawn_score = _clamp(100.0 - pawn_per_game * 12.0)  # 0=100, ~8/game=0 (was *20, 0 at 5/game)
+    weak_score = _clamp(100.0 - weak_per_game * 6.0)   # 0=100, ~16/game=0 (was *10, 0 at 10/game)
     p_score = _clamp(pawn_score * 0.6 + weak_score * 0.4)
 
     # BvN — Bishop vs Knight trade quality
@@ -251,13 +263,16 @@ def compute_tactics_score(m: RawMetrics) -> float:
     """
     Fraction of tactical moments handled correctly.
     A tactical moment = user's first move after the opponent blunders.
+
+    Note: proactive patterns (missed_fork/pin/hanging from the detector) fire on too
+    many positions where the user played a reasonable alternative, producing false-positive
+    counts that swamp the signal. Opportunism alone is a cleaner, better-calibrated metric.
     """
     total = m.tactical_moments_found + m.tactical_moments_missed
     if total == 0:
         return 50.0
 
-    found_rate = m.tactical_moments_found / total
-    return _clamp(found_rate * 100)
+    return _clamp(m.tactical_moments_found / total * 100)
 
 
 def compute_time_management_score(m: RawMetrics) -> float:
@@ -352,7 +367,8 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
         # ----------------------------------------------------------------
         user_evals = [e for e in evals if e.get("color") == user_color]
 
-        castled_early = False   # per-game flag for castling timing
+        castled_early = False   # per-game flag: castled by move 15
+        castled_at_all = False  # per-game flag: castled at any point
 
         for e in user_evals:
             cp_loss    = e.get("centipawn_loss", 0.0)
@@ -369,8 +385,10 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
             m.user_cp_loss_sum += min(cp_loss, 500.0)
             if cls == "blunder":
                 m.user_blunders += 1
-            if move_san in ("O-O", "O-O-O") and move_num <= 15 and not castled_early:
-                castled_early = True
+            if move_san in ("O-O", "O-O-O"):
+                castled_at_all = True
+                if move_num <= 15 and not castled_early:
+                    castled_early = True
 
             # Attack: positions where user has the initiative (equal or slightly worse)
             # Threshold -30 captures aggressive play from equal positions too;
@@ -390,6 +408,8 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
                 m.moves_under_pressure += 1
                 if cls == "blunder":
                     m.blunders_under_pressure += 1
+                elif cls == "mistake":
+                    m.mistakes_under_pressure += 1
 
             # Opening: first 10 moves
             if move_num <= 10:
@@ -412,6 +432,8 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
         # Castling timing per game
         if castled_early:
             m.castling_early_games += 1
+        if not castled_at_all:
+            m.games_never_castled += 1
 
         # ----------------------------------------------------------------
         # Tactics: accuracy of user's response right after opponent blunders
@@ -449,6 +471,10 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
                 m.weak_square_creations += 1
             elif ptype == "strategic_drift":
                 m.strategic_drifts += 1
+            elif ptype == "tactical_shot_found":
+                m.proactive_tactics_found += 1
+            elif ptype in ("missed_fork", "missed_pin", "missed_checkmate", "hanging_piece_missed"):
+                m.proactive_tactics_missed += 1
             elif ptype in ("bishop_knight_trade_bad", "bishop_knight_trade_ok"):
                 m.bvn_trades_total += 1
                 if ptype == "bishop_knight_trade_bad":

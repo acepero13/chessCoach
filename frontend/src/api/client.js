@@ -67,6 +67,9 @@ export const startAnnotationSession = (userId, gameId, timeBudget) =>
 export const submitAnnotation = (sessionId, payload) =>
   api.post(`/selfanalysis/session/${sessionId}/annotate`, payload)
 
+export const saveDraftAnnotation = (sessionId, payload) =>
+  api.post(`/selfanalysis/session/${sessionId}/save-draft`, payload)
+
 export const completeAnnotationSession = (sessionId, feelings = null) =>
   api.post(`/selfanalysis/session/${sessionId}/complete`, { game_feelings: feelings })
 

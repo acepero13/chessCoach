@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Chessboard } from 'react-chessboard'
 import {
-  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown,
   PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle, Cpu, Info,
   Bold, Italic, List,
 } from 'lucide-react'
@@ -10,7 +10,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
 import {
-  startAnnotationSession, submitAnnotation, completeAnnotationSession,
+  startAnnotationSession, submitAnnotation, saveDraftAnnotation, completeAnnotationSession,
   getLatestSessionForGame, getCoachReview, submitCoachReviewReply,
 } from '../api/client'
 
@@ -43,12 +43,54 @@ const EVAL_OPTIONS = [
 
 const TIME_BUDGETS = [15, 30, 60]
 
+const SIGNAL_CHECKS = [
+  { key: 'lpdo',       label: 'LPDO',        desc: 'Any loose (undefended) pieces that could be captured?' },
+  { key: 'geometry',   label: 'Geometry',    desc: 'Pieces aligned on the same rank / file / diagonal as the opponent\'s King?' },
+  { key: 'kingSafety', label: 'King Safety', desc: 'Is f2/f7 or h2/h7 weak? Open lines toward either King?' },
+]
+
+const MISTAKE_REASONS = [
+  { value: 'tactical_blindness', label: 'Tactical Blindness', desc: "Didn't see the signal" },
+  { value: 'laziness',           label: 'Laziness',           desc: 'Thought it was "good enough"' },
+  { value: 'impatience',         label: 'Impatience',         desc: 'Wanted to finish quickly' },
+  { value: 'noise_overload',     label: 'Noise Overload',     desc: 'Position got messy and I panicked' },
+]
+
+function FoldableSection({ title, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="border border-slate-700 rounded-lg overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-slate-300 hover:text-chess-gold hover:bg-slate-800/40 transition-colors select-none"
+      >
+        <span>{title}</span>
+        <ChevronDown size={14} className={`transition-transform duration-150 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-1 flex flex-col gap-2">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Convert centipawns to pawn-unit string (+3.2 / -4.0), handles mate scores
 function fmtEval(cp) {
   if (cp == null) return '?'
   if (Math.abs(cp) >= 9000) return cp > 0 ? '+M' : '-M'
   const pawns = cp / 100
   return `${pawns > 0 ? '+' : ''}${pawns.toFixed(1)}`
+}
+
+// Engine stores evals from the MOVER's perspective (positive = mover winning).
+// For display we always use WHITE's perspective (positive = white winning),
+// matching Lichess and every standard chess GUI.
+function toWhitePov(cp, color) {
+  if (cp == null) return null
+  return color === 'black' ? -cp : cp
 }
 
 // ── Arrow helpers ─────────────────────────────────────────────────────────────
@@ -223,20 +265,44 @@ export default function SelfAnalysis({ userId }) {
   const [evalLabel, setEvalLabel] = useState('')
   const [confidence, setConfidence] = useState(0)
   const [markedCritical, setMarkedCritical] = useState(false)
+  const [signalFlags, setSignalFlags] = useState({ lpdo: false, geometry: false, kingSafety: false })
+  const [mistakeReason, setMistakeReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   // Draft persistence: saves in-progress form per move_index so navigation doesn't wipe it
   const [draftAnnotations, setDraftAnnotations] = useState({})
-  // Ref always holds current form values — lets goTo read them without being a dependency
-  const formRef = useRef({ annotation: '', candidates: ['', '', ''], evalLabel: '', confidence: 0, markedCritical: false })
+  // Refs that let goTo read current state without stale closures
+  const formRef = useRef({ annotation: '', candidates: ['', '', ''], evalLabel: '', confidence: 0, markedCritical: false, signalFlags: { lpdo: false, geometry: false, kingSafety: false }, mistakeReason: '' })
   useEffect(() => {
-    formRef.current = { annotation, candidates, evalLabel, confidence, markedCritical }
-  }, [annotation, candidates, evalLabel, confidence, markedCritical])
+    formRef.current = { annotation, candidates, evalLabel, confidence, markedCritical, signalFlags, mistakeReason }
+  }, [annotation, candidates, evalLabel, confidence, markedCritical, signalFlags, mistakeReason])
+  const draftAnnotationsRef = useRef({})
+  useEffect(() => { draftAnnotationsRef.current = draftAnnotations }, [draftAnnotations])
+  const squareHighlightsRef = useRef({})
+  const userArrowsRef = useRef({})
+  const sessionIdRef = useRef(null)
+
+  // localStorage emergency backup — persists annotation text across page reloads
+  // Key: selfanalysis-{gameId}-{moveIndex}
+  const lsKey = (moveIdx) => `selfanalysis-${gameId}-${moveIdx}`
+  useEffect(() => {
+    const move = allGameMoves[navIdx]
+    // Only save for user moves — saving for opponent moves would pollute localStorage
+    // keys that the navIdx effect reads when restoring, causing stale annotations to appear.
+    if (!move?.is_user_move) return
+    const moveIndex = move.move_index
+    if (moveIndex === undefined || !annotation) return
+    try { localStorage.setItem(lsKey(moveIndex), annotation) } catch (_) {}
+  }, [annotation, navIdx, allGameMoves, gameId])
 
   // Arrow overlays & square highlights (shared across annotating + coach_review)
   const [showEngineArrows, setShowEngineArrows] = useState(false)
   const [squareHighlights, setSquareHighlights] = useState({})  // { moveIndex: { square: cssColor } }
   const [userArrows, setUserArrows] = useState({})              // { moveIndex: Arrow[] }
+  // Keep refs in sync so goTo can read them without stale closure issues
+  useEffect(() => { squareHighlightsRef.current = squareHighlights }, [squareHighlights])
+  useEffect(() => { userArrowsRef.current = userArrows }, [userArrows])
+  useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
   // Reflection
   const [reflection, setReflection] = useState(null)
@@ -279,19 +345,98 @@ export default function SelfAnalysis({ userId }) {
   const goTo = useCallback((idx) => {
     if (idx < 0 || idx >= allGameMoves.length) return
 
-    // Save current form to draft before leaving (uses ref — no dependency on form state)
-    const currentMoveIndex = allGameMoves[navIdx]?.move_index
-    if (currentMoveIndex !== undefined) {
-      setDraftAnnotations(prev => ({ ...prev, [currentMoveIndex]: { ...formRef.current } }))
+    // Save current form to draft before leaving (uses refs — no dependency on form state)
+    const currentMove = allGameMoves[navIdx]
+    const currentMoveIndex = currentMove?.move_index
+    if (currentMoveIndex !== undefined && currentMove?.is_user_move) {
+      const form = formRef.current
+      // In-memory draft (instant)
+      setDraftAnnotations(prev => ({ ...prev, [currentMoveIndex]: { ...form } }))
+      // Fire-and-forget DB persist (survives page reload/error)
+      // Backend save-draft won't overwrite submitted moves; frontend reveal panel
+      // takes priority over draftAnnotations when a move is already submitted.
+      const sid = sessionIdRef.current
+      if (sid) {
+        saveDraftAnnotation(sid, {
+          move_index: currentMoveIndex,
+          user_annotation: form.annotation || '',
+          user_candidates: (form.candidates || []).filter(Boolean),
+          user_eval_label: form.evalLabel || '',
+          user_confidence: form.confidence || 0,
+          user_marked_critical: form.markedCritical || false,
+          user_squares: squareHighlightsRef.current[currentMoveIndex] || {},
+          user_arrows: Array.isArray(userArrowsRef.current[currentMoveIndex]) ? userArrowsRef.current[currentMoveIndex] : [],
+          signal_flags: form.signalFlags || {},
+          mistake_reason: form.mistakeReason || '',
+        }).catch(err => {
+          console.warn('[save-draft]', err.response?.status, err.response?.data, 'move_index:', currentMoveIndex)
+        })
+      }
+    }
+
+    // Pre-load destination move form state in the same batch as setNavIdx.
+    // This eliminates the stale-annotation render frame that happens when
+    // annotation state from the previous move lingers until the navIdx effect fires.
+    // We ALWAYS reset state here — for user moves we restore draft/blank;
+    // for opponent moves we blank everything so localStorage is never polluted
+    // with the previous annotation under the opponent's move_index.
+    const nextMove = allGameMoves[idx]
+    if (nextMove?.is_user_move) {
+      const draft = draftAnnotationsRef.current[nextMove.move_index]
+      if (draft) {
+        setAnnotation(draft.annotation)
+        setCandidates(draft.candidates ?? ['', '', ''])
+        setEvalLabel(draft.evalLabel ?? '')
+        setConfidence(draft.confidence ?? 0)
+        setMarkedCritical(draft.markedCritical ?? false)
+        setSignalFlags(draft.signalFlags ?? { lpdo: false, geometry: false, kingSafety: false })
+        setMistakeReason(draft.mistakeReason ?? '')
+      } else {
+        setAnnotation('')
+        setCandidates(['', '', ''])
+        setEvalLabel('')
+        setConfidence(0)
+        setMarkedCritical(false)
+        setSignalFlags({ lpdo: false, geometry: false, kingSafety: false })
+        setMistakeReason('')
+      }
+    } else {
+      // Opponent's move — always blank form state.
+      setAnnotation('')
+      setCandidates(['', '', ''])
+      setEvalLabel('')
+      setConfidence(0)
+      setMarkedCritical(false)
+      setSignalFlags({ lpdo: false, geometry: false, kingSafety: false })
+      setMistakeReason('')
     }
 
     setNavIdx(idx)
   }, [allGameMoves, navIdx])
 
-  // Restore draft (or blank form) whenever navIdx changes
+  // Restore draft (or blank form) whenever navIdx changes.
+  // This is a safety net for cases where navIdx is set directly (e.g. checkExisting resume).
+  // When navigating via goTo, state is already pre-set above, so this is a no-op.
   useEffect(() => {
-    const moveIndex = allGameMoves[navIdx]?.move_index
+    const move = allGameMoves[navIdx]
+    const moveIndex = move?.move_index
     if (moveIndex === undefined) return
+
+    // Always blank form for opponent moves — they have no annotation form.
+    // Importantly, do NOT read localStorage here for opponent moves, because the
+    // localStorage save effect may have written the previous user annotation under
+    // the opponent's move_index (before this guard was in place).
+    if (!move.is_user_move) {
+      setAnnotation('')
+      setCandidates(['', '', ''])
+      setEvalLabel('')
+      setConfidence(0)
+      setMarkedCritical(false)
+      setSignalFlags({ lpdo: false, geometry: false, kingSafety: false })
+      setMistakeReason('')
+      return
+    }
+
     const draft = draftAnnotations[moveIndex]
     if (draft) {
       setAnnotation(draft.annotation)
@@ -299,12 +444,19 @@ export default function SelfAnalysis({ userId }) {
       setEvalLabel(draft.evalLabel)
       setConfidence(draft.confidence)
       setMarkedCritical(draft.markedCritical)
+      setSignalFlags(draft.signalFlags ?? { lpdo: false, geometry: false, kingSafety: false })
+      setMistakeReason(draft.mistakeReason ?? '')
     } else {
-      setAnnotation('')
+      // Try to recover annotation text from localStorage emergency backup
+      let savedAnnotation = ''
+      try { savedAnnotation = localStorage.getItem(`selfanalysis-${gameId}-${moveIndex}`) || '' } catch (_) {}
+      setAnnotation(savedAnnotation)
       setCandidates(['', '', ''])
       setEvalLabel('')
       setConfidence(0)
       setMarkedCritical(false)
+      setSignalFlags({ lpdo: false, geometry: false, kingSafety: false })
+      setMistakeReason('')
     }
   // draftAnnotations intentionally excluded — we only want to run on navigation
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -392,42 +544,82 @@ export default function SelfAnalysis({ userId }) {
         loadSessionData(data)
 
         // Pre-populate annotated moves from stored moves_data
+        // Submitted moves → annotatedMoves (shows engine reveal); drafts → draftAnnotations (refills form)
         const preAnnotated = {}
+        const presDrafts = {}
         const restoredHighlights = {}
         const restoredArrows = {}
         for (const m of data.moves_data || []) {
-          preAnnotated[m.move_index] = {
-            engine_eval_before: m.engine_eval_before,
-            engine_eval_after: m.engine_eval_after,
-            centipawn_loss: m.centipawn_loss,
-            classification: m.classification,
-            engine_best_move: m.engine_best_move,
-            engine_best_move_uci: m.engine_best_move_uci,
-            engine_pv_san: m.engine_pv_san,
-            engine_multipv: m.engine_multipv,
-            patterns: m.patterns,
-            explanation: m.explanation,
-            eval_verdict: null,
-            user_annotation: m.user_annotation || '',
-            user_candidates: m.user_candidates || [],
-            user_eval_label: m.user_eval_label || '',
-          }
           if (m.user_squares && Object.keys(m.user_squares).length > 0)
             restoredHighlights[m.move_index] = m.user_squares
           if (m.user_arrows?.length > 0)
             restoredArrows[m.move_index] = m.user_arrows
+
+          if (m.draft) {
+            // Restore form state only — user hasn't submitted this move yet
+            presDrafts[m.move_index] = {
+              annotation: m.user_annotation || '',
+              candidates: m.user_candidates?.length ? m.user_candidates : ['', '', ''],
+              evalLabel: m.user_eval_label || '',
+              confidence: m.user_confidence || 0,
+              markedCritical: m.user_marked_critical || false,
+              signalFlags: m.signal_flags || { lpdo: false, geometry: false, kingSafety: false },
+              mistakeReason: m.mistake_reason || '',
+            }
+          } else {
+            preAnnotated[m.move_index] = {
+              engine_eval_before: m.engine_eval_before,
+              engine_eval_after: m.engine_eval_after,
+              centipawn_loss: m.centipawn_loss,
+              classification: m.classification,
+              engine_best_move: m.engine_best_move,
+              engine_best_move_uci: m.engine_best_move_uci,
+              engine_pv_san: m.engine_pv_san,
+              engine_multipv: m.engine_multipv,
+              patterns: m.patterns,
+              explanation: m.explanation,
+              eval_verdict: null,
+              user_annotation: m.user_annotation || '',
+              user_candidates: m.user_candidates || [],
+              user_eval_label: m.user_eval_label || '',
+            }
+          }
         }
         setAnnotatedMoves(preAnnotated)
+        setDraftAnnotations(presDrafts)
         setSquareHighlights(restoredHighlights)
         setUserArrows(restoredArrows)
 
         // Navigate to first unannotated user move
+        // (annotated_move_indices from server only includes submitted, not draft, moves)
         const annotatedSet = new Set(data.annotated_move_indices || [])
-        const firstUnannotated = data.all_game_moves.findIndex(
+        const firstUnannotatedIdx = data.all_game_moves.findIndex(
           m => m.is_user_move && !annotatedSet.has(m.move_index)
         )
-        setNavIdx(firstUnannotated >= 0 ? firstUnannotated : 0)
-        resetFormOnly()
+        const targetIdx = firstUnannotatedIdx >= 0 ? firstUnannotatedIdx : 0
+        const targetMove = data.all_game_moves[targetIdx]
+        const targetDraft = targetMove?.is_user_move ? presDrafts[targetMove.move_index] : null
+        // Pre-load form state in the same batch as setNavIdx so the RichTextEditor
+        // mounts with the correct defaultValue on the first render (navIdx effect is
+        // a safety net but runs after the first render, which could show a stale value).
+        if (targetDraft) {
+          setAnnotation(targetDraft.annotation)
+          setCandidates(targetDraft.candidates ?? ['', '', ''])
+          setEvalLabel(targetDraft.evalLabel ?? '')
+          setConfidence(targetDraft.confidence ?? 0)
+          setMarkedCritical(targetDraft.markedCritical ?? false)
+          setSignalFlags(targetDraft.signalFlags ?? { lpdo: false, geometry: false, kingSafety: false })
+          setMistakeReason(targetDraft.mistakeReason ?? '')
+        } else {
+          setAnnotation('')
+          setCandidates(['', '', ''])
+          setEvalLabel('')
+          setConfidence(0)
+          setMarkedCritical(false)
+          setSignalFlags({ lpdo: false, geometry: false, kingSafety: false })
+          setMistakeReason('')
+        }
+        setNavIdx(targetIdx)
         setPhase('annotating')
       } catch (e) {
         if (e.response?.status === 404) {
@@ -485,26 +677,36 @@ export default function SelfAnalysis({ userId }) {
     setEvalLabel('')
     setConfidence(0)
     setMarkedCritical(false)
+    setSignalFlags({ lpdo: false, geometry: false, kingSafety: false })
+    setMistakeReason('')
     setDraftAnnotations({})
   }
 
   const handleSubmit = async () => {
     if (!currentMove || !isUserMove) return
+    const moveIndex = currentMove.move_index
+    // Guard: move_index must be a valid integer (undefined would be stripped from JSON → 422)
+    if (moveIndex === undefined || moveIndex === null || !Number.isInteger(moveIndex)) {
+      setError(`Invalid move index (${moveIndex}) — please navigate away and back, then retry.`)
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
-      const moveIndex = currentMove.move_index
       const currentSquares = squareHighlights[moveIndex] || {}
-      const currentUserArrows = userArrows[moveIndex] || []
+      const currentUserArrows = Array.isArray(userArrows[moveIndex]) ? userArrows[moveIndex] : []
+      const filteredCandidates = candidates.filter(c => c?.trim?.() ?? false)
       const payload = {
         move_index: moveIndex,
         user_annotation: annotation,
-        user_candidates: candidates.filter(c => c.trim()),
+        user_candidates: filteredCandidates,
         user_eval_label: evalLabel,
         user_confidence: confidence,
         user_marked_critical: markedCritical,
         user_squares: currentSquares,
         user_arrows: currentUserArrows,
+        signal_flags: signalFlags,
+        mistake_reason: mistakeReason,
       }
       const res = await submitAnnotation(sessionId, payload)
       // Store engine data AND user's own annotation/visual data so the reveal panel can display them
@@ -513,10 +715,12 @@ export default function SelfAnalysis({ userId }) {
         [moveIndex]: {
           ...res.data,
           user_annotation: annotation,
-          user_candidates: candidates.filter(c => c.trim()),
+          user_candidates: filteredCandidates,
           user_eval_label: evalLabel,
           user_squares: currentSquares,
           user_arrows: currentUserArrows,
+          signal_flags: signalFlags,
+          mistake_reason: mistakeReason,
         },
       }))
       // Drop the draft for this move — it's now revealed and immutable
@@ -525,8 +729,15 @@ export default function SelfAnalysis({ userId }) {
         delete next[currentMove.move_index]
         return next
       })
+      // Clear localStorage backup for this move
+      try { localStorage.removeItem(lsKey(moveIndex)) } catch (_) {}
     } catch (e) {
-      setError(e.response?.data?.detail || e.message)
+      const detail = e.response?.data?.detail
+      const msg = Array.isArray(detail)
+        ? detail.map(d => `${d.loc?.slice(-1)[0] ?? 'field'}: ${d.msg}`).join(' | ')
+        : (detail || e.message)
+      console.error('[annotate 422]', e.response?.status, e.response?.data, 'payload move_index:', moveIndex)
+      setError(`Submit failed: ${msg} — your text is preserved, try again.`)
     } finally {
       setSubmitting(false)
     }
@@ -601,8 +812,8 @@ export default function SelfAnalysis({ userId }) {
     })
   }, [allGameMoves, navIdx])
 
-  const handleArrowsChange = useCallback((newArrows) => {
-    // onArrowsChange fires with [] on mount — ignore that to avoid wiping restored arrows
+  const handleArrowsChange = useCallback(({ arrows: newArrows } = {}) => {
+    // onArrowsChange fires on every board mount with empty arrows — ignore to avoid wiping
     if (!newArrows || newArrows.length === 0) return
     const moveIndex = allGameMoves[navIdx]?.move_index
     if (moveIndex === undefined) return
@@ -824,12 +1035,12 @@ export default function SelfAnalysis({ userId }) {
             {showEngineArrows && currentMove && (
               <div className="mt-1 flex items-center justify-center gap-1.5 text-xs font-mono">
                 <span className="text-slate-500">Eval:</span>
-                <span className={(currentReveal?.engine_eval_before ?? currentMove.eval_before) >= 0 ? 'text-green-400' : 'text-red-400'}>
-                  {fmtEval(currentReveal?.engine_eval_before ?? currentMove.eval_before)}
+                <span className={toWhitePov(currentReveal?.engine_eval_before ?? currentMove.eval_before, currentMove.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                  {fmtEval(toWhitePov(currentReveal?.engine_eval_before ?? currentMove.eval_before, currentMove.color))}
                 </span>
                 <span className="text-slate-600">→</span>
-                <span className={(currentReveal?.engine_eval_after ?? currentMove.eval_after) >= 0 ? 'text-green-400' : 'text-red-400'}>
-                  {fmtEval(currentReveal?.engine_eval_after ?? currentMove.eval_after)}
+                <span className={toWhitePov(currentReveal?.engine_eval_after ?? currentMove.eval_after, currentMove.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                  {fmtEval(toWhitePov(currentReveal?.engine_eval_after ?? currentMove.eval_after, currentMove.color))}
                 </span>
               </div>
             )}
@@ -909,13 +1120,32 @@ export default function SelfAnalysis({ userId }) {
                   <PenLine size={16} /> Your Analysis
                 </h3>
 
+                {/* Signal Scan checklist — force pre-move tactical scan */}
+                <FoldableSection title="⚡ Signal Scan — check before you write" defaultOpen={true}>
+                  <p className="text-xs text-slate-500">Tick what you actually found before writing your reasoning:</p>
+                  {SIGNAL_CHECKS.map(({ key, label, desc }) => (
+                    <label key={key} className="flex items-start gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={signalFlags[key] ?? false}
+                        onChange={e => setSignalFlags(prev => ({ ...prev, [key]: e.target.checked }))}
+                        className="accent-chess-gold w-4 h-4 mt-0.5 shrink-0"
+                      />
+                      <span className="text-sm leading-snug">
+                        <span className="text-chess-gold font-semibold">{label}</span>
+                        <span className="text-slate-400"> — {desc}</span>
+                      </span>
+                    </label>
+                  ))}
+                </FoldableSection>
+
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">
                     What were you thinking? Why this move?
                   </label>
                   <RichTextEditor
                     key={`editor-${currentMove?.move_index}`}
-                    defaultValue={draftAnnotations[currentMove?.move_index]?.annotation ?? annotation}
+                    defaultValue={annotation}
                     onChange={setAnnotation}
                     placeholder="Describe your reasoning…"
                   />
@@ -990,6 +1220,28 @@ export default function SelfAnalysis({ userId }) {
                   Mark as Critical (deeper analysis — 4 top lines)
                 </label>
 
+                {/* Root Cause — optional self-categorisation of mistake type */}
+                <FoldableSection title="🧠 Root Cause (optional)" defaultOpen={false}>
+                  <p className="text-xs text-slate-500">What drove this move choice?</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {MISTAKE_REASONS.map(r => (
+                      <button
+                        key={r.value}
+                        type="button"
+                        title={r.desc}
+                        onClick={() => setMistakeReason(prev => prev === r.value ? '' : r.value)}
+                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                          mistakeReason === r.value
+                            ? 'bg-orange-900/60 text-orange-200 border-orange-500 font-semibold'
+                            : 'border-slate-600 text-slate-400 hover:border-orange-400 hover:text-orange-300'
+                        }`}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </FoldableSection>
+
                 <div className="flex gap-2 pt-1">
                   <button
                     onClick={goNext}
@@ -1018,8 +1270,23 @@ export default function SelfAnalysis({ userId }) {
                 </div>
 
                 {/* User's own annotation — persisted so it survives navigation */}
-                {(currentReveal.user_annotation || currentReveal.user_candidates?.length > 0) && (
+                {(currentReveal.user_annotation || currentReveal.user_candidates?.length > 0 ||
+                  Object.values(currentReveal.signal_flags || {}).some(Boolean) ||
+                  currentReveal.mistake_reason) && (
                   <div className="bg-chess-dark rounded-lg p-3 flex flex-col gap-2 border border-slate-700">
+                    {/* Signal scan summary */}
+                    {Object.values(currentReveal.signal_flags || {}).some(Boolean) && (
+                      <div>
+                        <div className="text-xs text-slate-500 mb-1">Signals found</div>
+                        <div className="flex flex-wrap gap-1">
+                          {SIGNAL_CHECKS.filter(s => currentReveal.signal_flags?.[s.key]).map(s => (
+                            <span key={s.key} className="text-xs px-2 py-0.5 rounded-full bg-chess-gold/20 text-chess-gold border border-chess-gold/40">
+                              {s.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {currentReveal.user_annotation && (
                       <div>
                         <div className="text-xs text-slate-500 mb-1">Your thinking</div>
@@ -1039,6 +1306,15 @@ export default function SelfAnalysis({ userId }) {
                             </span>
                           ))}
                         </div>
+                      </div>
+                    )}
+                    {/* Root cause badge */}
+                    {currentReveal.mistake_reason && (
+                      <div>
+                        <div className="text-xs text-slate-500 mb-1">Root cause</div>
+                        <span className="text-xs px-2.5 py-1 rounded-full bg-orange-900/40 text-orange-300 border border-orange-700">
+                          {MISTAKE_REASONS.find(r => r.value === currentReveal.mistake_reason)?.label ?? currentReveal.mistake_reason}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1074,12 +1350,12 @@ export default function SelfAnalysis({ userId }) {
                 {currentReveal.engine_eval_before != null && currentReveal.engine_eval_after != null && (
                   <div className="flex items-center gap-1.5 text-xs font-mono text-slate-500">
                     <span>Eval:</span>
-                    <span className={currentReveal.engine_eval_before >= 0 ? 'text-green-400' : 'text-red-400'}>
-                      {fmtEval(currentReveal.engine_eval_before)}
+                    <span className={toWhitePov(currentReveal.engine_eval_before, currentMove.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(toWhitePov(currentReveal.engine_eval_before, currentMove.color))}
                     </span>
                     <span className="text-slate-600">→</span>
-                    <span className={currentReveal.engine_eval_after >= 0 ? 'text-green-400' : 'text-red-400'}>
-                      {fmtEval(currentReveal.engine_eval_after)}
+                    <span className={toWhitePov(currentReveal.engine_eval_after, currentMove.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(toWhitePov(currentReveal.engine_eval_after, currentMove.color))}
                     </span>
                   </div>
                 )}
@@ -1090,7 +1366,7 @@ export default function SelfAnalysis({ userId }) {
                       <div key={i} className="bg-chess-dark rounded-lg px-3 py-1.5 text-xs font-mono text-slate-300 flex gap-2 items-baseline">
                         <span className="text-slate-500 w-3">{line.rank}.</span>
                         <span className="text-chess-gold font-bold w-10">{line.move_san}</span>
-                        <span className="text-slate-500 w-10">{fmtEval(line.score_cp)}</span>
+                        <span className="text-slate-500 w-10">{fmtEval(toWhitePov(line.score_cp, currentMove.color))}</span>
                         <span className="text-slate-400 truncate">{line.pv_san?.join(' ')}</span>
                       </div>
                     ))}
@@ -1808,9 +2084,7 @@ function CoachReviewPhase({
               <div className="text-sm font-semibold text-red-300 mb-0.5">This is where the game collapsed</div>
               <div className="text-xs text-slate-400">
                 {item.engine_eval_before != null && item.engine_eval_after != null
-                  ? `Eval went from ${item.engine_eval_before > 0 ? '+' : ''}${Math.round(item.engine_eval_before)} to ${
-                      item.engine_eval_after > 0 ? '+' : ''
-                    }${Math.round(item.engine_eval_after)} cp after ${item.move_san} — a swing of ${Math.round(item.centipawn_loss)} cp.`
+                  ? `Eval went from ${fmtEval(toWhitePov(item.engine_eval_before, item.color))} to ${fmtEval(toWhitePov(item.engine_eval_after, item.color))} after ${item.move_san} — a swing of ${Math.round(item.centipawn_loss)} cp.`
                   : `${item.move_san} caused a ${Math.round(item.centipawn_loss)} cp loss.`
                 }
                 {' '}Study this position carefully — your thinking process here is the key lesson.
@@ -1869,12 +2143,12 @@ function CoachReviewPhase({
               {/* Eval delta */}
               {item.engine_eval_before != null && item.engine_eval_after != null && (
                 <div className="mt-1.5 flex items-center justify-center gap-1.5 text-xs font-mono">
-                  <span className={item.engine_eval_before >= 0 ? 'text-green-400' : 'text-red-400'}>
-                    {fmtEval(item.engine_eval_before)}
+                  <span className={toWhitePov(item.engine_eval_before, item.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                    {fmtEval(toWhitePov(item.engine_eval_before, item.color))}
                   </span>
                   <span className="text-slate-600">→</span>
-                  <span className={item.engine_eval_after >= 0 ? 'text-green-400' : 'text-red-400'}>
-                    {fmtEval(item.engine_eval_after)}
+                  <span className={toWhitePov(item.engine_eval_after, item.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                    {fmtEval(toWhitePov(item.engine_eval_after, item.color))}
                   </span>
                 </div>
               )}
@@ -1894,7 +2168,7 @@ function CoachReviewPhase({
                       <div key={i} className="flex gap-2 text-xs font-mono text-slate-400">
                         <span className="text-slate-600 w-3">{line.rank}.</span>
                         <span className="text-chess-gold font-bold w-10">{line.move_san}</span>
-                        <span className="text-slate-500 w-10">{fmtEval(line.score_cp)}</span>
+                        <span className="text-slate-500 w-10">{fmtEval(toWhitePov(line.score_cp, item.color))}</span>
                         <span className="truncate">{line.pv_san?.join(' ')}</span>
                       </div>
                     ))}
@@ -1989,12 +2263,12 @@ function CoachReviewPhase({
                 {/* Eval before → after */}
                 {item.engine_eval_before != null && item.engine_eval_after != null && (
                   <div className="flex items-center gap-1 text-xs font-mono">
-                    <span className={item.engine_eval_before >= 0 ? 'text-green-400' : 'text-red-400'}>
-                      {fmtEval(item.engine_eval_before)}
+                    <span className={toWhitePov(item.engine_eval_before, item.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(toWhitePov(item.engine_eval_before, item.color))}
                     </span>
                     <span className="text-slate-600">→</span>
-                    <span className={item.engine_eval_after >= 0 ? 'text-green-400' : 'text-red-400'}>
-                      {fmtEval(item.engine_eval_after)}
+                    <span className={toWhitePov(item.engine_eval_after, item.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(toWhitePov(item.engine_eval_after, item.color))}
                     </span>
                   </div>
                 )}

@@ -85,7 +85,7 @@ def _eval_drift(move_evals: list[MoveEval], window: int = 8) -> list[tuple[int, 
             i += 1
             continue
         drift = same_color[0].eval_before - same_color[-1].eval_after
-        if drift > 100:  # 1+ pawn drift without blunders = strategic failure
+        if drift > 150:  # 1.5+ pawn drift without blunders = strategic failure (100cp was too sensitive)
             drifts.append((i, round(drift, 1)))
             i += window  # skip ahead to avoid re-counting the same drift
         else:
