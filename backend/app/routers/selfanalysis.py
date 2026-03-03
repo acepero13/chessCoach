@@ -335,6 +335,7 @@ async def annotate_move(
         "engine_pv_san": pv_san,
         "engine_multipv": engine_multipv,
         "patterns": patterns,
+        "eval_verdict": verdict,
         "explanation": "",
         "draft": False,   # explicitly mark as submitted so save-draft can never overwrite it
     }
@@ -701,6 +702,7 @@ async def get_coach_review(
             "move_index": move.get("move_index"),
             "move_san": move.get("move_san", ""),
             "move_number": move.get("move_number", 0),
+            "color": move.get("color", "white"),
             "fen_before": move.get("fen_before", ""),
             "classification": move.get("classification", ""),
             "centipawn_loss": move.get("centipawn_loss", 0.0),

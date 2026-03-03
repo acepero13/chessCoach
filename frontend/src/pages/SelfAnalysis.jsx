@@ -208,6 +208,29 @@ function BoardLegend() {
   )
 }
 
+// Build a reveal-entry from a stored moves_data record (used when loading/resuming a session).
+// This is the shape that annotatedMoves[] expects, matching what submitAnnotation() returns live.
+function _moveDataToReveal(m) {
+  return {
+    engine_eval_before: m.engine_eval_before,
+    engine_eval_after: m.engine_eval_after,
+    centipawn_loss: m.centipawn_loss,
+    classification: m.classification,
+    engine_best_move: m.engine_best_move,
+    engine_best_move_uci: m.engine_best_move_uci,
+    engine_pv_san: m.engine_pv_san,
+    engine_multipv: m.engine_multipv,
+    patterns: m.patterns,
+    explanation: m.explanation,
+    eval_verdict: m.eval_verdict || null,   // restored — new sessions store this; old sessions get null
+    user_annotation: m.user_annotation || '',
+    user_candidates: m.user_candidates || [],
+    user_eval_label: m.user_eval_label || '',
+    signal_flags: m.signal_flags || {},
+    mistake_reason: m.mistake_reason || '',
+  }
+}
+
 // revealData = annotatedMoves entry (has multipv); moveData = allGameMoves entry (has best_move_uci)
 function buildEngineArrows(revealData, moveData) {
   // Prefer multipv from reveal (richer, fresher analysis)
@@ -511,22 +534,7 @@ export default function SelfAnalysis({ userId }) {
           const restoredHighlights = {}
           const restoredArrows = {}
           for (const m of data.moves_data || []) {
-            preAnnotated[m.move_index] = {
-              engine_eval_before: m.engine_eval_before,
-              engine_eval_after: m.engine_eval_after,
-              centipawn_loss: m.centipawn_loss,
-              classification: m.classification,
-              engine_best_move: m.engine_best_move,
-              engine_best_move_uci: m.engine_best_move_uci,
-              engine_pv_san: m.engine_pv_san,
-              engine_multipv: m.engine_multipv,
-              patterns: m.patterns,
-              explanation: m.explanation,
-              eval_verdict: null,
-              user_annotation: m.user_annotation || '',
-              user_candidates: m.user_candidates || [],
-              user_eval_label: m.user_eval_label || '',
-            }
+            preAnnotated[m.move_index] = _moveDataToReveal(m)
             if (m.user_squares && Object.keys(m.user_squares).length > 0)
               restoredHighlights[m.move_index] = m.user_squares
             if (m.user_arrows?.length > 0)
@@ -567,22 +575,7 @@ export default function SelfAnalysis({ userId }) {
               mistakeReason: m.mistake_reason || '',
             }
           } else {
-            preAnnotated[m.move_index] = {
-              engine_eval_before: m.engine_eval_before,
-              engine_eval_after: m.engine_eval_after,
-              centipawn_loss: m.centipawn_loss,
-              classification: m.classification,
-              engine_best_move: m.engine_best_move,
-              engine_best_move_uci: m.engine_best_move_uci,
-              engine_pv_san: m.engine_pv_san,
-              engine_multipv: m.engine_multipv,
-              patterns: m.patterns,
-              explanation: m.explanation,
-              eval_verdict: null,
-              user_annotation: m.user_annotation || '',
-              user_candidates: m.user_candidates || [],
-              user_eval_label: m.user_eval_label || '',
-            }
+            preAnnotated[m.move_index] = _moveDataToReveal(m)
           }
         }
         setAnnotatedMoves(preAnnotated)
@@ -1300,11 +1293,19 @@ export default function SelfAnalysis({ userId }) {
                       <div>
                         <div className="text-xs text-slate-500 mb-1">Your candidates</div>
                         <div className="flex gap-1.5 flex-wrap">
-                          {currentReveal.user_candidates.map((c, i) => (
-                            <span key={i} className="text-xs font-mono px-2 py-0.5 rounded border border-slate-600 text-slate-300 bg-chess-panel">
-                              {c}
-                            </span>
-                          ))}
+                          {currentReveal.user_candidates.map((c, i) => {
+                            const isEngineBest = c === currentReveal.engine_best_move
+                            const isTopPv = !isEngineBest && currentReveal.engine_multipv?.slice(1, 3)?.some(l => l.move_san === c)
+                            return (
+                              <span key={i} className={`text-xs font-mono px-2 py-0.5 rounded border ${
+                                isEngineBest ? 'bg-green-900/40 border-green-700 text-green-300'
+                                : isTopPv    ? 'bg-blue-900/40 border-blue-700 text-blue-300'
+                                :              'border-slate-600 text-slate-300 bg-chess-panel'
+                              }`}>
+                                {c}{isEngineBest && ' ✓'}
+                              </span>
+                            )
+                          })}
                         </div>
                       </div>
                     )}

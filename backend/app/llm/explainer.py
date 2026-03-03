@@ -1,7 +1,16 @@
 """
 LLM coaching explanations via Ollama Python SDK.
 All calls degrade gracefully — a missing/slow LLM never crashes the app.
+
+Thinking-model support (Qwen3, DeepSeek-R1, QwQ, etc.) — requires ollama SDK >= 0.6:
+  - Detected automatically from the model name in settings.
+  - For thinking models, think=False is passed to Ollama so the model answers
+    directly without generating a chain-of-thought block.  This is much faster
+    and avoids consuming num_predict tokens on reasoning before the actual answer.
+  - As a safety net, any <think>…</think> blocks that slip through are stripped
+    from the returned content before it reaches callers.
 """
+import re
 import json
 import asyncio
 from ollama import AsyncClient
@@ -21,6 +30,24 @@ SYSTEM_PROMPT = (
     "Mention a relevant chess principle when appropriate. Never invent variations not given."
 )
 
+# Known thinking-model name fragments (case-insensitive match against settings.ollama_model).
+_THINKING_MODEL_PATTERNS = ("qwen3", "deepseek-r1", "qwq", "qvq")
+
+
+def _is_thinking_model() -> bool:
+    """Return True if the configured Ollama model is a known chain-of-thought/thinking model."""
+    name = settings.ollama_model.lower()
+    return any(p in name for p in _THINKING_MODEL_PATTERNS)
+
+
+def _strip_thinking(text: str) -> str:
+    """
+    Remove <think>…</think> blocks emitted by reasoning models.
+    Safety net — normally thinking is disabled via think=False in _call_ollama.
+    """
+    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    return stripped.strip()
+
 
 async def _call_ollama(
     prompt: str,
@@ -30,9 +57,12 @@ async def _call_ollama(
 ) -> str | None:
     """
     Call Ollama with a hard timeout. Returns None on any failure so callers degrade gracefully.
+    For thinking models (Qwen3 etc.), think=False is passed so the model skips chain-of-thought.
     """
+    is_thinking = _is_thinking_model()
+
     async def _chat() -> str:
-        resp = await _client.chat(
+        kwargs = dict(
             model=settings.ollama_model,
             messages=[
                 {"role": "system", "content": system},
@@ -40,7 +70,11 @@ async def _call_ollama(
             ],
             options={"temperature": 0.3, "num_predict": num_predict},
         )
-        return resp.message.content.strip()
+        if is_thinking:
+            kwargs["think"] = False   # SDK >= 0.6: disable chain-of-thought for faster responses
+        resp = await _client.chat(**kwargs)
+        raw = resp.message.content.strip()
+        return _strip_thinking(raw)   # strip any stray <think> blocks as safety net
 
     try:
         return await asyncio.wait_for(_chat(), timeout=timeout)
