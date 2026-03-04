@@ -4,7 +4,6 @@ import { Chessboard } from 'react-chessboard'
 import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown,
   PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle, Cpu, Info,
-  Bold, Italic, List,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
@@ -15,6 +14,71 @@ import {
 } from '../api/client'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Minimal markdown renderer for LLM output.
+ * Handles: **bold**, *italic*, bullet lists (- / * lines), numbered lists, and newlines.
+ */
+function Md({ text, className = '' }) {
+  if (!text) return null
+
+  const lines = text.split('\n')
+  const elements = []
+  let listItems = []
+  let listType = null   // 'ul' | 'ol'
+
+  const flushList = () => {
+    if (!listItems.length) return
+    const Tag = listType === 'ol' ? 'ol' : 'ul'
+    const cls = listType === 'ol' ? 'list-decimal list-inside space-y-0.5' : 'list-disc list-inside space-y-0.5'
+    elements.push(
+      <Tag key={elements.length} className={cls}>
+        {listItems.map((item, i) => <li key={i}>{inlineMarkdown(item)}</li>)}
+      </Tag>
+    )
+    listItems = []
+    listType = null
+  }
+
+  lines.forEach((line, idx) => {
+    const ulMatch = line.match(/^[-*]\s+(.+)/)
+    const olMatch = line.match(/^\d+\.\s+(.+)/)
+
+    if (ulMatch) {
+      if (listType === 'ol') flushList()
+      listType = 'ul'
+      listItems.push(ulMatch[1])
+    } else if (olMatch) {
+      if (listType === 'ul') flushList()
+      listType = 'ol'
+      listItems.push(olMatch[1])
+    } else {
+      flushList()
+      if (line.trim() === '') {
+        if (idx > 0) elements.push(<br key={elements.length} />)
+      } else {
+        elements.push(<span key={elements.length} className="block">{inlineMarkdown(line)}</span>)
+      }
+    }
+  })
+  flushList()
+
+  return <div className={className}>{elements}</div>
+}
+
+function inlineMarkdown(text) {
+  // Split on bold (**...**) and italic (*...*)
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>
+    }
+    if (part.startsWith('*') && part.endsWith('*')) {
+      return <em key={i}>{part.slice(1, -1)}</em>
+    }
+    return part
+  })
+}
 
 function classificationClass(c) {
   const map = {
@@ -1385,8 +1449,8 @@ export default function SelfAnalysis({ userId }) {
                 )}
 
                 {currentReveal.explanation && (
-                  <div className="text-sm text-slate-300 leading-relaxed border-t border-slate-700 pt-3 whitespace-pre-wrap">
-                    {currentReveal.explanation}
+                  <div className="border-t border-slate-700 pt-3">
+                    <Md text={currentReveal.explanation} className="text-sm text-slate-300 leading-relaxed" />
                   </div>
                 )}
               </div>
@@ -1779,7 +1843,8 @@ function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCo
             <ul className="space-y-1.5">
               {reflection.thinking_notes.map((note, i) => (
                 <li key={i} className="text-sm text-slate-300 flex gap-2">
-                  <span className="text-chess-gold mt-0.5">·</span>{note}
+                  <span className="text-chess-gold mt-0.5 flex-shrink-0">·</span>
+                  <span>{inlineMarkdown(note)}</span>
                 </li>
               ))}
             </ul>
@@ -1793,9 +1858,7 @@ function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCo
               <MessageSquare size={16} className="text-chess-gold" />
               <h3 className="text-sm font-semibold text-chess-gold">Coach on Your Reflection</h3>
             </div>
-            <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-              {reflection.questionnaire_coaching}
-            </p>
+            <Md text={reflection.questionnaire_coaching} className="text-sm text-slate-300 leading-relaxed" />
           </div>
         )}
 

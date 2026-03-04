@@ -4,6 +4,37 @@ import { Chessboard } from 'react-chessboard'
 import { Send, ChevronLeft, Lightbulb, Eye, Trophy, ChevronDown, ChevronUp } from 'lucide-react'
 import { startSession, submitAnswer } from '../api/client'
 
+function inlineMarkdown(text) {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>
+    if (part.startsWith('*') && part.endsWith('*'))   return <em key={i}>{part.slice(1, -1)}</em>
+    return part
+  })
+}
+
+function Md({ text, className = '' }) {
+  if (!text) return null
+  const lines = text.split('\n')
+  const elements = []
+  let listItems = [], listType = null
+  const flushList = () => {
+    if (!listItems.length) return
+    const Tag = listType === 'ol' ? 'ol' : 'ul'
+    const cls = listType === 'ol' ? 'list-decimal list-inside space-y-0.5' : 'list-disc list-inside space-y-0.5'
+    elements.push(<Tag key={elements.length} className={cls}>{listItems.map((it, i) => <li key={i}>{inlineMarkdown(it)}</li>)}</Tag>)
+    listItems = []; listType = null
+  }
+  lines.forEach((line, idx) => {
+    const ul = line.match(/^[-*]\s+(.+)/), ol = line.match(/^\d+\.\s+(.+)/)
+    if (ul) { if (listType === 'ol') flushList(); listType = 'ul'; listItems.push(ul[1]) }
+    else if (ol) { if (listType === 'ul') flushList(); listType = 'ol'; listItems.push(ol[1]) }
+    else { flushList(); if (line.trim() === '') { if (idx > 0) elements.push(<br key={elements.length} />) } else elements.push(<span key={elements.length} className="block">{inlineMarkdown(line)}</span>) }
+  })
+  flushList()
+  return <div className={className}>{elements}</div>
+}
+
 function classificationClass(c) {
   const map = {
     best: 'move-best', good: 'move-good',
@@ -293,8 +324,8 @@ export default function CoachingSession() {
                 )}
 
                 {revealed.explanation && (
-                  <div className="text-sm text-slate-300 leading-relaxed border-t border-slate-700 pt-3 whitespace-pre-wrap">
-                    {revealed.explanation}
+                  <div className="border-t border-slate-700 pt-3">
+                    <Md text={revealed.explanation} className="text-sm text-slate-300 leading-relaxed" />
                   </div>
                 )}
 

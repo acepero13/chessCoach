@@ -31,7 +31,7 @@ SYSTEM_PROMPT = (
 )
 
 # Known thinking-model name fragments (case-insensitive match against settings.ollama_model).
-_THINKING_MODEL_PATTERNS = ("qwen3", "deepseek-r1", "qwq", "qvq")
+_THINKING_MODEL_PATTERNS = ("qwen", "deepseek-r1", "qwq", "qvq")
 
 
 def _is_thinking_model() -> bool:
