@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chess-tutor-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./chess_tutor.db
+      - STOCKFISH_PATH=/usr/bin/stockfish
+      - OLLAMA_HOST=http://localhost:11434
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - ollama
+    networks:
+      - chess-tutor-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:8000
+    container_name: chess-tutor-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - chess-tutor-network
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: chess-tutor-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - chess-tutor-network
+
+volumes:
+  ollama-data:
+    driver: local
+
+networks:
+  chess-tutor-network:
+    driver: bridge
