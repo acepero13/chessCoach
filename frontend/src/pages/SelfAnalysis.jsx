@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Chessboard } from 'react-chessboard'
 import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown,
-  PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle, Cpu, Info,
+  PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle, Cpu, Info, Download,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
@@ -12,6 +12,256 @@ import {
   startAnnotationSession, submitAnnotation, saveDraftAnnotation, completeAnnotationSession,
   getLatestSessionForGame, getCoachReview, submitCoachReviewReply,
 } from '../api/client'
+
+// ── Export helpers ────────────────────────────────────────────────────────────
+
+function stripHtml(html) {
+  if (!html) return ''
+  const el = document.createElement('div')
+  el.innerHTML = html
+  return el.textContent || el.innerText || ''
+}
+
+/**
+ * Builds the full markdown export string from all session data.
+ * Accepts the same shape used by the main SelfAnalysis component state.
+ */
+function buildMarkdownExport({ allGameMoves, annotatedMoves, sessionMeta, reflection, reviewItems, reviewResponses }) {
+  const date = new Date().toISOString().slice(0, 10)
+  const white = sessionMeta?.white_player || 'White'
+  const black = sessionMeta?.black_player || 'Black'
+  const userColor = sessionMeta?.user_color || 'white'
+  const lines = []
+
+  // ── Header ──
+  lines.push(`# Self-Analysis: ${white} vs ${black}`)
+  lines.push('')
+  lines.push(`**Date:** ${date}`)
+  lines.push(`**You played as:** ${userColor.charAt(0).toUpperCase() + userColor.slice(1)}`)
+  lines.push('')
+  lines.push('---')
+  lines.push('')
+
+  // ── PGN with inline annotations ──
+  lines.push('## PGN with Annotations')
+  lines.push('')
+  lines.push('```')
+  lines.push('[Event "Self-Analysis"]')
+  lines.push(`[Date "${date}"]`)
+  lines.push(`[White "${white}"]`)
+  lines.push(`[Black "${black}"]`)
+  lines.push('')
+
+  let pgnText = ''
+  let prevMoveNumber = null
+  for (const move of allGameMoves) {
+    const { move_number, color, move_san, move_index } = move
+    const reveal = annotatedMoves[move_index]
+    if (color === 'white') {
+      pgnText += `${move_number}. `
+    } else if (prevMoveNumber !== move_number) {
+      pgnText += `${move_number}... `
+    }
+    prevMoveNumber = move_number
+    pgnText += move_san
+    const commentParts = []
+    if (reveal?.user_annotation) {
+      const text = stripHtml(reveal.user_annotation).trim()
+      if (text) commentParts.push(`[You] ${text}`)
+    }
+    if (reveal?.explanation) {
+      commentParts.push(`[Coach] ${reveal.explanation.trim()}`)
+    }
+    if (commentParts.length > 0) {
+      const comment = commentParts.join(' | ').replace(/[{}]/g, '')
+      pgnText += ` { ${comment} } `
+    } else {
+      pgnText += ' '
+    }
+  }
+
+  lines.push(pgnText.trim())
+  lines.push('```')
+  lines.push('')
+  lines.push('---')
+  lines.push('')
+
+  // ── Move-by-move annotations ──
+  const annotatedList = allGameMoves.filter(m => m.is_user_move && annotatedMoves[m.move_index])
+  if (annotatedList.length > 0) {
+    lines.push('## Move-by-Move Annotations')
+    lines.push('')
+    for (const move of annotatedList) {
+      const reveal = annotatedMoves[move.move_index]
+      const cls = reveal.classification || ''
+      const cpLoss = reveal.centipawn_loss ? `${Math.round(reveal.centipawn_loss)} cp` : null
+      let header = `### Move ${move.move_number} · \`${move.move_san}\``
+      if (cls) header += ` — *${cls}${cpLoss ? ` · ${cpLoss}` : ''}*`
+      lines.push(header)
+      lines.push('')
+
+      if (reveal.user_eval_label) {
+        lines.push(`**Your assessment:** ${reveal.user_eval_label}`)
+      }
+      if (reveal.eval_verdict) {
+        lines.push(`**Eval accuracy:** ${reveal.eval_verdict}`)
+      }
+
+      const signals = [
+        { key: 'lpdo', label: 'LPDO' },
+        { key: 'geometry', label: 'Geometry' },
+        { key: 'kingSafety', label: 'King Safety' },
+      ].filter(s => reveal.signal_flags?.[s.key]).map(s => s.label)
+      if (signals.length > 0) {
+        lines.push(`**Signals checked:** ${signals.join(', ')}`)
+      }
+
+      if (reveal.user_candidates?.length > 0) {
+        const cands = reveal.user_candidates.map(c =>
+          c === reveal.engine_best_move ? `${c} ✓` : c
+        )
+        lines.push(`**Candidates considered:** ${cands.join(', ')}`)
+      }
+
+      if (reveal.mistake_reason) {
+        const reasons = {
+          tactical_blindness: 'Tactical Blindness',
+          laziness: 'Laziness',
+          impatience: 'Impatience',
+          noise_overload: 'Noise Overload',
+        }
+        lines.push(`**Root cause:** ${reasons[reveal.mistake_reason] ?? reveal.mistake_reason}`)
+      }
+
+      if (reveal.user_annotation) {
+        const text = stripHtml(reveal.user_annotation).trim()
+        if (text) {
+          lines.push('')
+          lines.push('**Your thinking:**')
+          lines.push('')
+          lines.push(text)
+        }
+      }
+
+      lines.push('')
+      if (reveal.engine_best_move) {
+        lines.push(`**Engine best move:** \`${reveal.engine_best_move}\``)
+      }
+      if (cpLoss) {
+        lines.push(`**Centipawn loss:** ${cpLoss}`)
+      }
+      if (reveal.engine_pv_san?.length > 0) {
+        lines.push(`**Engine line:** ${reveal.engine_pv_san.join(' ')}`)
+      }
+      if (reveal.patterns?.length > 0) {
+        lines.push(`**Patterns:** ${reveal.patterns.map(p => p.type?.replace(/_/g, ' ')).join(', ')}`)
+      }
+      if (reveal.explanation) {
+        lines.push('')
+        lines.push('**Coach explanation:**')
+        lines.push('')
+        lines.push(reveal.explanation.trim())
+      }
+
+      lines.push('')
+      lines.push('---')
+      lines.push('')
+    }
+  }
+
+  // ── Post-game reflection ──
+  if (reflection?.game_feelings) {
+    const q = reflection.game_feelings
+    lines.push('## Post-Game Reflection')
+    lines.push('')
+    if (q.feelings?.length > 0) {
+      lines.push(`**Feelings:** ${q.feelings.join(', ')}`)
+    }
+    const qFields = [
+      { key: 'result_reason', label: 'Why this result' },
+      { key: 'key_moment', label: 'Key turning point' },
+      { key: 'takeaway', label: 'Takeaway' },
+      { key: 'would_do_differently', label: 'Would do differently' },
+      { key: 'plan_adherence', label: 'Plan adherence' },
+      { key: 'time_pressure', label: 'Time pressure' },
+      { key: 'opening_prep', label: 'Opening prep' },
+      { key: 'extra_note', label: 'Extra note' },
+    ]
+    for (const { key, label } of qFields) {
+      if (q[key]) lines.push(`**${label}:** ${String(q[key]).replace(/_/g, ' ')}`)
+    }
+    if (reflection.questionnaire_coaching) {
+      lines.push('')
+      lines.push('**Coach on your reflection:**')
+      lines.push('')
+      lines.push(reflection.questionnaire_coaching.trim())
+    }
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+  }
+
+  // ── Session scores ──
+  if (reflection) {
+    lines.push('## Session Scores')
+    lines.push('')
+    const scores = [
+      { name: 'Eval Accuracy', value: reflection.eval_accuracy_score },
+      { name: 'Candidate Quality', value: reflection.candidate_quality_score },
+      { name: 'Tactical Awareness', value: reflection.tactical_awareness_score },
+      { name: 'Confidence Calibration', value: reflection.confidence_calibration_score },
+    ]
+    lines.push('| Score | Value |')
+    lines.push('|-------|-------|')
+    for (const s of scores) {
+      if (s.value != null) lines.push(`| ${s.name} | ${s.value}/100 |`)
+    }
+    if (reflection.thinking_notes?.length > 0) {
+      lines.push('')
+      lines.push('**Coaching notes:**')
+      lines.push('')
+      for (const note of reflection.thinking_notes) {
+        lines.push(`- ${note}`)
+      }
+    }
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+  }
+
+  // ── Coach review Q&A ──
+  if (reviewItems?.length > 0) {
+    lines.push('## Coach Review Q&A')
+    lines.push('')
+    for (const item of reviewItems) {
+      const resp = reviewResponses?.[item.move_index]
+      lines.push(`### Move ${item.move_number} · \`${item.move_san}\``)
+      lines.push('')
+      if (item.coach_comment) {
+        lines.push('**Coach:**')
+        lines.push('')
+        lines.push(item.coach_comment.trim())
+        lines.push('')
+      }
+      if (resp?.response) {
+        lines.push('**Your response:**')
+        lines.push('')
+        lines.push(resp.response.trim())
+        lines.push('')
+      }
+      if (resp?.reply) {
+        lines.push('**Coach reply:**')
+        lines.push('')
+        lines.push(resp.reply.trim())
+        lines.push('')
+      }
+      lines.push('---')
+      lines.push('')
+    }
+  }
+
+  return lines.join('\n')
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -894,6 +1144,28 @@ export default function SelfAnalysis({ userId }) {
     }
   }
 
+  const handleExport = () => {
+    const md = buildMarkdownExport({
+      allGameMoves,
+      annotatedMoves,
+      sessionMeta,
+      reflection,
+      reviewItems,
+      reviewResponses,
+    })
+    const white = sessionMeta?.white_player || 'White'
+    const black = sessionMeta?.black_player || 'Black'
+    const date = new Date().toISOString().slice(0, 10)
+    const filename = `self-analysis-${white}-vs-${black}-${date}.md`.toLowerCase().replace(/\s+/g, '-')
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (phase === 'loading') {
@@ -937,6 +1209,7 @@ export default function SelfAnalysis({ userId }) {
         onNewSession={handleStartNew}
         onCoachReview={handleCoachReview}
         onReviewAnnotations={() => setPhase('annotating')}
+        onExport={handleExport}
         reviewLoading={reviewLoading}
         error={error}
       />
@@ -1025,6 +1298,15 @@ export default function SelfAnalysis({ userId }) {
               </button>
               <BoardLegend />
             </div>
+
+            {/* Export */}
+            <button
+              onClick={handleExport}
+              title="Export session as Markdown"
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-white transition-colors"
+            >
+              <Download size={12} /> Export
+            </button>
 
             {/* Finish session */}
             <button
@@ -1770,7 +2052,7 @@ function SetupPhase({ timeBudget, setTimeBudget, customBudget, setCustomBudget, 
 
 // ── Complete Phase ────────────────────────────────────────────────────────────
 
-function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCoachReview, onReviewAnnotations, reviewLoading, error }) {
+function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCoachReview, onReviewAnnotations, onExport, reviewLoading, error }) {
   const [reflectionsOpen, setReflectionsOpen] = useState(false)
 
   if (!reflection) {
@@ -1934,6 +2216,13 @@ function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCo
             New Session
           </button>
         </div>
+
+        <button
+          onClick={onExport}
+          className="w-full mt-2 flex items-center justify-center gap-2 border border-slate-600 text-slate-400 hover:text-white hover:border-slate-400 font-medium py-2.5 rounded-xl transition-colors text-sm"
+        >
+          <Download size={15} /> Export as Markdown
+        </button>
       </div>
     </div>
   )
