@@ -49,6 +49,9 @@ export const getProfileHistory = (userId) =>
 export const getPatternStats = (userId) =>
   api.get(`/profile/${userId}/pattern-stats`)
 
+export const getProgress = (userId) =>
+  api.get(`/profile/${userId}/progress`)
+
 // Coaching
 export const startSession = (userId, gameId) =>
   api.post('/coaching/session/start', { user_id: userId, game_id: gameId })

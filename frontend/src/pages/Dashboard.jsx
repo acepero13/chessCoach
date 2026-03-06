@@ -10,7 +10,7 @@ import GameImport from '../components/GameImport'
 import GameList from '../components/GameList'
 import {
   listGames, getLatestProfile, computeProfile, selectGames,
-  getProfileHistory, getPatternStats, resetDatabase,
+  getProfileHistory, getPatternStats, getProgress, resetDatabase,
 } from '../api/client'
 
 // ── Pattern label mapping ────────────────────────────────────────────────────
@@ -63,18 +63,21 @@ export default function Dashboard({ userId, username, setUser }) {
   // Insights data
   const [profileHistory, setProfileHistory] = useState([])
   const [patternStats, setPatternStats] = useState(null)
+  const [progress, setProgress] = useState(null)
   const [insightsLoading, setInsightsLoading] = useState(false)
 
   const fetchData = async (uid) => {
     if (!uid) return
     setLoading(true)
     try {
-      const [gRes, pRes] = await Promise.allSettled([
+      const [gRes, pRes, progRes] = await Promise.allSettled([
         listGames(uid),
         getLatestProfile(uid),
+        getProgress(uid),
       ])
       if (gRes.status === 'fulfilled') setGames(gRes.value.data)
       if (pRes.status === 'fulfilled') setProfile(pRes.value.data)
+      if (progRes.status === 'fulfilled') setProgress(progRes.value.data)
     } finally {
       setLoading(false)
     }
@@ -84,12 +87,14 @@ export default function Dashboard({ userId, username, setUser }) {
     if (!uid) return
     setInsightsLoading(true)
     try {
-      const [histRes, patRes] = await Promise.allSettled([
+      const [histRes, patRes, progRes] = await Promise.allSettled([
         getProfileHistory(uid),
         getPatternStats(uid),
+        getProgress(uid),
       ])
       if (histRes.status === 'fulfilled') setProfileHistory(histRes.value.data)
       if (patRes.status === 'fulfilled') setPatternStats(patRes.value.data)
+      if (progRes.status === 'fulfilled') setProgress(progRes.value.data)
     } finally {
       setInsightsLoading(false)
     }
@@ -114,8 +119,7 @@ export default function Dashboard({ userId, username, setUser }) {
     try {
       await computeProfile(userId)
       await fetchData(userId)
-      // Refresh insights too if loaded
-      if (profileHistory.length || patternStats) fetchInsights(userId)
+      fetchInsights(userId)
     } catch (e) {
       alert(e.response?.data?.detail || e.message)
     } finally {
@@ -271,25 +275,42 @@ export default function Dashboard({ userId, username, setUser }) {
 
         {/* Tab content */}
         {tab === 'overview' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {scores ? (
-              <ScoreRadar scores={scores} />
-            ) : (
-              <NoProfileCard analyzedCount={analyzedCount} onCompute={handleComputeProfile} computing={computingProfile} onImport={() => setTab('import')} />
+          <div className="space-y-6">
+            {/* Progress banner — only when we have a delta from a previous analysis */}
+            {progress?.has_previous && (
+              <ProgressBanner progress={progress} />
             )}
 
-            {profile && (
-              <div className="bg-chess-panel rounded-xl p-4">
-                <h2 className="text-lg font-semibold text-chess-gold mb-3">Profile Summary</h2>
-                <div className="space-y-2">
-                  {Object.entries(scores)
-                    .sort((a, b) => a[1] - b[1])
-                    .map(([key, val]) => (
-                      <ScoreBar key={key} label={key.replace(/_/g, ' ')} score={val} />
-                    ))}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {scores ? (
+                <ScoreRadar scores={scores} />
+              ) : (
+                <NoProfileCard analyzedCount={analyzedCount} onCompute={handleComputeProfile} computing={computingProfile} onImport={() => setTab('import')} />
+              )}
+
+              {profile && (
+                <div className="bg-chess-panel rounded-xl p-4">
+                  <h2 className="text-lg font-semibold text-chess-gold mb-3">Profile Summary</h2>
+                  <div className="space-y-2">
+                    {Object.entries(scores)
+                      .sort((a, b) => a[1] - b[1])
+                      .map(([key, val]) => (
+                        <ScoreBar
+                          key={key}
+                          label={key.replace(/_/g, ' ')}
+                          score={val}
+                          delta={progress?.deltas?.[key]}
+                        />
+                      ))}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-3">Based on {profile.games_analyzed} analyzed games</p>
                 </div>
-                <p className="text-xs text-slate-500 mt-3">Based on {profile.games_analyzed} analyzed games</p>
-              </div>
+              )}
+            </div>
+
+            {/* Recurring problems — always visible on overview if data exists */}
+            {progress?.recurring_patterns?.length > 0 && (
+              <RecurringProblemsCard patterns={progress.recurring_patterns} totalGames={progress.total_games} />
             )}
           </div>
         )}
@@ -298,6 +319,7 @@ export default function Dashboard({ userId, username, setUser }) {
           <InsightsTab
             profileHistory={profileHistory}
             patternStats={patternStats}
+            progress={progress}
             loading={insightsLoading}
             onRefresh={() => fetchInsights(userId)}
           />
@@ -317,7 +339,7 @@ export default function Dashboard({ userId, username, setUser }) {
 
 // ── Insights tab ─────────────────────────────────────────────────────────────
 
-function InsightsTab({ profileHistory, patternStats, loading, onRefresh }) {
+function InsightsTab({ profileHistory, patternStats, progress, loading, onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -353,6 +375,11 @@ function InsightsTab({ profileHistory, patternStats, loading, onRefresh }) {
 
   return (
     <div className="space-y-6">
+      {/* Recurring problems callout */}
+      {progress?.recurring_patterns?.length > 0 && (
+        <RecurringProblemsCard patterns={progress.recurring_patterns} totalGames={progress.total_games} />
+      )}
+
       {/* Score history */}
       <div className="bg-chess-panel rounded-xl p-4">
         <div className="flex items-center justify-between mb-4">
@@ -455,8 +482,10 @@ function ActionCard({ icon, title, description, onClick }) {
   )
 }
 
-function ScoreBar({ label, score }) {
+function ScoreBar({ label, score, delta }) {
   const color = score >= 70 ? '#4ade80' : score >= 50 ? '#facc15' : '#ef4444'
+  const deltaColor = delta > 0 ? '#4ade80' : delta < 0 ? '#f87171' : '#64748b'
+  const deltaLabel = delta == null ? null : delta > 0 ? `+${delta}` : `${delta}`
   return (
     <div className="flex items-center gap-3">
       <span className="text-xs text-slate-400 capitalize w-28 flex-shrink-0">{label}</span>
@@ -464,6 +493,93 @@ function ScoreBar({ label, score }) {
         <div className="h-2 rounded-full transition-all" style={{ width: `${score}%`, backgroundColor: color }} />
       </div>
       <span className="text-xs font-bold w-8 text-right" style={{ color }}>{Math.round(score)}</span>
+      {deltaLabel != null && (
+        <span className="text-xs font-semibold w-9 text-right" style={{ color: deltaColor }}>
+          {deltaLabel}
+        </span>
+      )}
+    </div>
+  )
+}
+
+const PATTERN_LABEL = {
+  fork: 'Fork (missed)',
+  pin: 'Pin (missed)',
+  hanging_piece_missed: 'Hanging piece (missed)',
+  missed_checkmate: 'Missed checkmate',
+  missed_fork: 'Missed fork',
+  missed_pin: 'Missed pin',
+  pawn_structure_weakened: 'Pawn structure weakened',
+  isolated_pawn_created: 'Isolated pawn',
+  weak_squares_created: 'Weak squares',
+  strategic_drift: 'Strategic drift',
+  bishop_knight_trade_bad: 'Poor B×N trade',
+}
+
+function RecurringProblemsCard({ patterns, totalGames }) {
+  return (
+    <div className="bg-chess-panel border border-red-900/40 rounded-xl p-4">
+      <h2 className="text-lg font-semibold text-red-400 mb-1">Recurring Problems</h2>
+      <p className="text-xs text-slate-500 mb-4">
+        Patterns that appeared in your games — across {totalGames} analyzed game{totalGames !== 1 ? 's' : ''}.
+      </p>
+      <div className="space-y-3">
+        {patterns.map((p) => {
+          const label = PATTERN_LABEL[p.type] || p.type.replace(/_/g, ' ')
+          const barPct = Math.min(100, p.pct)
+          return (
+            <div key={p.type}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-slate-200">{label}</span>
+                <span className="text-xs text-slate-400">
+                  {p.games} game{p.games !== 1 ? 's' : ''} ({p.pct}%)
+                </span>
+              </div>
+              <div className="bg-slate-700 rounded-full h-1.5">
+                <div
+                  className="h-1.5 rounded-full bg-red-500 transition-all"
+                  style={{ width: `${barPct}%` }}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ProgressBanner({ progress }) {
+  const { biggest_improvement: imp, biggest_decline: dec } = progress
+  if (!imp && !dec) return null
+
+  const fmt = (s) => s.replace(/_/g, ' ')
+
+  return (
+    <div className="bg-chess-panel border border-slate-700 rounded-xl p-4 flex flex-wrap gap-6">
+      <div className="flex-1 min-w-0">
+        <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Since last analysis</p>
+        <div className="flex flex-wrap gap-4">
+          {imp && (
+            <div className="flex items-center gap-2">
+              <span className="text-green-400 text-lg font-bold">↑</span>
+              <div>
+                <p className="text-sm font-semibold text-white capitalize">{fmt(imp.score)}</p>
+                <p className="text-xs text-green-400">+{imp.delta} pts — biggest improvement</p>
+              </div>
+            </div>
+          )}
+          {dec && (
+            <div className="flex items-center gap-2">
+              <span className="text-red-400 text-lg font-bold">↓</span>
+              <div>
+                <p className="text-sm font-semibold text-white capitalize">{fmt(dec.score)}</p>
+                <p className="text-xs text-red-400">{dec.delta} pts — needs attention</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

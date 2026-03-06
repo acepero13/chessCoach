@@ -138,6 +138,109 @@ async def get_profile_history(user_id: int, db: AsyncSession = Depends(get_db)):
     ]
 
 
+SCORE_FIELDS = [
+    ("attack", "attack_score"),
+    ("defense", "defense_score"),
+    ("opening", "opening_score"),
+    ("strategy", "strategy_score"),
+    ("endgame", "endgame_score"),
+    ("tactics", "tactics_score"),
+    ("time_management", "time_management_score"),
+    ("conversion", "conversion_score"),
+    ("mental_stability", "mental_stability_score"),
+]
+
+NEGATIVE_PATTERNS = {
+    "fork", "pin", "hanging_piece_missed", "missed_checkmate",
+    "missed_fork", "missed_pin", "pawn_structure_weakened",
+    "isolated_pawn_created", "weak_squares_created", "strategic_drift",
+    "bishop_knight_trade_bad",
+}
+
+
+@router.get("/{user_id}/progress")
+async def get_progress(user_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Compare the two most recent profiles and return score deltas and
+    top recurring negative patterns (with per-game counts).
+    """
+    # ── Last 2 profiles ──────────────────────────────────────────────
+    profiles_result = await db.execute(
+        select(PerformanceProfile)
+        .where(PerformanceProfile.user_id == user_id)
+        .order_by(PerformanceProfile.created_at.desc())
+        .limit(2)
+    )
+    profiles = profiles_result.scalars().all()
+
+    deltas = {}
+    biggest_improvement = None
+    biggest_decline = None
+
+    if len(profiles) >= 2:
+        current, previous = profiles[0], profiles[1]
+        for key, col in SCORE_FIELDS:
+            d = round(getattr(current, col) - getattr(previous, col), 1)
+            deltas[key] = d
+        if deltas:
+            best_key = max(deltas, key=lambda k: deltas[k])
+            worst_key = min(deltas, key=lambda k: deltas[k])
+            if deltas[best_key] > 0:
+                biggest_improvement = {"score": best_key, "delta": deltas[best_key]}
+            if deltas[worst_key] < 0:
+                biggest_decline = {"score": worst_key, "delta": deltas[worst_key]}
+
+    # ── Recurring negative patterns with per-game counts ─────────────
+    games_result = await db.execute(select(Game).where(Game.user_id == user_id))
+    games = games_result.scalars().all()
+    game_ids = [g.id for g in games]
+    game_color_map = {g.id: g.user_color for g in games}
+
+    pattern_game_counts: dict[str, int] = {}
+    total_games = 0
+
+    if game_ids:
+        analyses_result = await db.execute(
+            select(GameAnalysis).where(
+                GameAnalysis.game_id.in_(game_ids),
+                GameAnalysis.status == AnalysisStatus.complete,
+            )
+        )
+        analyses = analyses_result.scalars().all()
+        total_games = len(analyses)
+
+        for a in analyses:
+            user_color = game_color_map.get(a.game_id, "white")
+            seen_in_game: set[str] = set()
+            for p in (a.patterns_detected or []):
+                if p.get("color") == user_color:
+                    ptype = p.get("type", "unknown")
+                    if ptype in NEGATIVE_PATTERNS and ptype not in seen_in_game:
+                        seen_in_game.add(ptype)
+                        pattern_game_counts[ptype] = pattern_game_counts.get(ptype, 0) + 1
+
+    recurring = sorted(
+        [
+            {
+                "type": k,
+                "games": v,
+                "pct": round(v / total_games * 100) if total_games else 0,
+            }
+            for k, v in pattern_game_counts.items()
+        ],
+        key=lambda x: -x["games"],
+    )[:5]
+
+    return {
+        "has_previous": len(profiles) >= 2,
+        "deltas": deltas,
+        "biggest_improvement": biggest_improvement,
+        "biggest_decline": biggest_decline,
+        "recurring_patterns": recurring,
+        "total_games": total_games,
+    }
+
+
 @router.get("/{user_id}/pattern-stats")
 async def get_pattern_stats(user_id: int, db: AsyncSession = Depends(get_db)):
     """Aggregate user-side pattern counts across all analyzed games."""
