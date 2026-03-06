@@ -5,6 +5,7 @@ import CoachingSession from './pages/CoachingSession'
 import TrainingPlan from './pages/TrainingPlan'
 import SelfAnalysis from './pages/SelfAnalysis'
 import ReviewedGames from './pages/ReviewedGames'
+import GameReview from './pages/GameReview'
 
 export default function App() {
   const [userId, setUserIdState] = useState(() => {
@@ -22,6 +23,9 @@ export default function App() {
     if (name) {
       setUsernameState(name)
       localStorage.setItem('chessTutorUsername', name)
+    } else if (name === null) {
+      setUsernameState('')
+      localStorage.removeItem('chessTutorUsername')
     }
   }
 
@@ -47,6 +51,10 @@ export default function App() {
         <Route
           path="/reviewed-games"
           element={<ReviewedGames userId={userId} />}
+        />
+        <Route
+          path="/game/:gameId"
+          element={<GameReview userId={userId} />}
         />
       </Routes>
     </BrowserRouter>

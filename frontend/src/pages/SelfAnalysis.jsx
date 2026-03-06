@@ -4,6 +4,7 @@ import { Chessboard } from 'react-chessboard'
 import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown,
   PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle, Cpu, Info, Download,
+  Bold, Italic, List,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell

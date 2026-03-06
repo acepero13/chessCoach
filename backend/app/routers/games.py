@@ -368,6 +368,34 @@ async def get_game_analysis(game_id: int, db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.get("/{game_id}")
+async def get_game(game_id: int, db: AsyncSession = Depends(get_db)):
+    """Get metadata for a single game."""
+    result = await db.execute(select(Game).where(Game.id == game_id))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    analysis_result = await db.execute(
+        select(GameAnalysis).where(GameAnalysis.game_id == game_id)
+    )
+    analysis = analysis_result.scalar_one_or_none()
+    return {
+        "id": game.id,
+        "white_player": game.white_player,
+        "black_player": game.black_player,
+        "white_elo": game.white_elo,
+        "black_elo": game.black_elo,
+        "result": game.result.value if game.result else None,
+        "user_color": game.user_color,
+        "opening_eco": game.opening_eco,
+        "opening_name": game.opening_name,
+        "time_control": game.time_control,
+        "played_at": game.played_at.isoformat() if game.played_at else None,
+        "source": game.source.value if game.source else None,
+        "has_analysis": analysis is not None and analysis.status.value == "complete",
+    }
+
+
 def _split_pgns(pgn_data: str) -> list[str]:
     """Split a multi-game PGN string into individual game strings."""
     games = []

@@ -110,6 +110,68 @@ async def get_latest_profile(user_id: int, db: AsyncSession = Depends(get_db)):
     return profile
 
 
+@router.get("/{user_id}/history")
+async def get_profile_history(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Return all profile snapshots for a user, oldest first (for trend charts)."""
+    result = await db.execute(
+        select(PerformanceProfile)
+        .where(PerformanceProfile.user_id == user_id)
+        .order_by(PerformanceProfile.created_at.asc())
+    )
+    profiles = result.scalars().all()
+    return [
+        {
+            "id": p.id,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "games_analyzed": p.games_analyzed,
+            "attack": p.attack_score,
+            "defense": p.defense_score,
+            "opening": p.opening_score,
+            "strategy": p.strategy_score,
+            "endgame": p.endgame_score,
+            "tactics": p.tactics_score,
+            "time_management": p.time_management_score,
+            "conversion": p.conversion_score,
+            "mental_stability": p.mental_stability_score,
+        }
+        for p in profiles
+    ]
+
+
+@router.get("/{user_id}/pattern-stats")
+async def get_pattern_stats(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Aggregate user-side pattern counts across all analyzed games."""
+    games_result = await db.execute(select(Game).where(Game.user_id == user_id))
+    games = games_result.scalars().all()
+    game_ids = [g.id for g in games]
+
+    if not game_ids:
+        return {"patterns": [], "total_games": 0}
+
+    analyses_result = await db.execute(
+        select(GameAnalysis).where(
+            GameAnalysis.game_id.in_(game_ids),
+            GameAnalysis.status == AnalysisStatus.complete,
+        )
+    )
+    analyses = analyses_result.scalars().all()
+    game_color_map = {g.id: g.user_color for g in games}
+
+    pattern_counts: dict[str, int] = {}
+    for a in analyses:
+        user_color = game_color_map.get(a.game_id, "white")
+        for p in (a.patterns_detected or []):
+            if p.get("color") == user_color:
+                ptype = p.get("type", "unknown")
+                pattern_counts[ptype] = pattern_counts.get(ptype, 0) + 1
+
+    patterns = sorted(
+        [{"type": k, "count": v} for k, v in pattern_counts.items()],
+        key=lambda x: -x["count"],
+    )
+    return {"patterns": patterns, "total_games": len(analyses)}
+
+
 @router.get("/{user_id}/select-games")
 async def select_games_for_coaching(
     user_id: int,

@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle, Circle, Zap, AlertCircle, Loader2, Clock, BookOpen, PenLine } from 'lucide-react'
+import { CheckCircle, Circle, Zap, AlertCircle, Loader2, Clock, BookOpen, PenLine, Eye, ChevronUp, ChevronDown } from 'lucide-react'
 import { analyzeGames, getAnalysisStatus } from '../api/client'
 
 function resultBadge(result) {
@@ -8,20 +8,29 @@ function resultBadge(result) {
   return map[result] || 'bg-slate-600 text-slate-100'
 }
 
+const RESULT_FILTERS = ['all', 'win', 'loss', 'draw']
+const STATUS_FILTERS = ['all', 'analyzed', 'not analyzed']
+
 export default function GameList({ games, userId, onAnalyzed }) {
   const navigate = useNavigate()
   const [selected, setSelected] = useState(new Set())
   const [submitting, setSubmitting] = useState(false)
   const [analysisRunning, setAnalysisRunning] = useState(false)
-  const [status, setStatus] = useState(null)   // { pending, running, complete, failed, total }
+  const [status, setStatus] = useState(null)
   const [error, setError] = useState(null)
-  const [openDropdown, setOpenDropdown] = useState(null)  // game.id | null
+  const [openDropdown, setOpenDropdown] = useState(null)
+
+  // Filter & sort state
+  const [resultFilter, setResultFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [sortBy, setSortBy] = useState('newest')
+  const [sortAsc, setSortAsc] = useState(false)
+
   const pollRef = useRef(null)
 
-  // Poll for analysis progress whenever analysis is running
+  // Poll for analysis progress
   useEffect(() => {
     if (!analysisRunning || !userId) return
-
     const poll = async () => {
       try {
         const res = await getAnalysisStatus(userId)
@@ -32,25 +41,44 @@ export default function GameList({ games, userId, onAnalyzed }) {
           onAnalyzed?.()
           clearInterval(pollRef.current)
         }
-      } catch {
-        // ignore transient errors
-      }
+      } catch { /* ignore transient errors */ }
     }
-
     poll()
     pollRef.current = setInterval(poll, 3000)
     return () => clearInterval(pollRef.current)
   }, [analysisRunning, userId])
 
-  const toggle = (id) => {
-    setSelected(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
-  }
+  const toggle = (id) => setSelected(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
 
-  const selectAll = () => setSelected(new Set(games.map(g => g.id)))
+  // Apply filters and sort
+  const displayedGames = useMemo(() => {
+    let filtered = [...games]
+    if (resultFilter !== 'all') filtered = filtered.filter(g => g.result === resultFilter)
+    if (statusFilter === 'analyzed') filtered = filtered.filter(g => g.has_analysis)
+    if (statusFilter === 'not analyzed') filtered = filtered.filter(g => !g.has_analysis)
+
+    filtered.sort((a, b) => {
+      let diff = 0
+      if (sortBy === 'newest' || sortBy === 'oldest') {
+        const aTime = a.played_at ? new Date(a.played_at).getTime() : a.id
+        const bTime = b.played_at ? new Date(b.played_at).getTime() : b.id
+        diff = aTime - bTime
+      } else if (sortBy === 'result') {
+        const order = { win: 0, draw: 1, loss: 2 }
+        diff = (order[a.result] ?? 3) - (order[b.result] ?? 3)
+      } else if (sortBy === 'opening') {
+        diff = (a.opening_eco || '').localeCompare(b.opening_eco || '')
+      }
+      return sortAsc ? diff : -diff
+    })
+    return filtered
+  }, [games, resultFilter, statusFilter, sortBy, sortAsc])
+
+  const selectAll = () => setSelected(new Set(displayedGames.map(g => g.id)))
   const clearAll = () => setSelected(new Set())
 
   const handleAnalyze = async () => {
@@ -67,6 +95,29 @@ export default function GameList({ games, userId, onAnalyzed }) {
     }
   }
 
+  const cycleSortBy = (field) => {
+    if (sortBy === field) {
+      setSortAsc(a => !a)
+    } else {
+      setSortBy(field)
+      setSortAsc(false)
+    }
+  }
+
+  const SortBtn = ({ field, label }) => (
+    <button
+      onClick={() => cycleSortBy(field)}
+      className={`text-xs px-2 py-1 rounded flex items-center gap-0.5 transition-colors ${
+        sortBy === field ? 'text-chess-gold bg-chess-accent/30' : 'text-slate-400 hover:text-white'
+      }`}
+    >
+      {label}
+      {sortBy === field
+        ? (sortAsc ? <ChevronUp size={11} /> : <ChevronDown size={11} />)
+        : null}
+    </button>
+  )
+
   if (!games?.length) {
     return (
       <div className="bg-chess-panel rounded-xl p-8 text-center text-slate-400">
@@ -82,7 +133,7 @@ export default function GameList({ games, userId, onAnalyzed }) {
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-slate-700">
         <h2 className="text-lg font-semibold text-chess-gold">
-          Games ({games.length})
+          Games ({displayedGames.length}{displayedGames.length !== games.length ? `/${games.length}` : ''})
           <span className="ml-2 text-sm font-normal text-slate-400">
             {analyzedCount} analyzed
           </span>
@@ -91,6 +142,52 @@ export default function GameList({ games, userId, onAnalyzed }) {
           <button onClick={selectAll} className="text-xs text-slate-400 hover:text-white">Select all</button>
           <span className="text-slate-600">|</span>
           <button onClick={clearAll} className="text-xs text-slate-400 hover:text-white">Clear</button>
+        </div>
+      </div>
+
+      {/* Filter & Sort bar */}
+      <div className="px-4 py-2 border-b border-slate-800 flex flex-wrap gap-3 items-center">
+        {/* Result filter pills */}
+        <div className="flex gap-1">
+          {RESULT_FILTERS.map(f => (
+            <button
+              key={f}
+              onClick={() => setResultFilter(f)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors capitalize ${
+                resultFilter === f
+                  ? 'bg-chess-gold text-chess-dark border-chess-gold font-medium'
+                  : 'border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+
+        <span className="text-slate-700 text-xs">|</span>
+
+        {/* Status filter */}
+        <div className="flex gap-1">
+          {STATUS_FILTERS.map(f => (
+            <button
+              key={f}
+              onClick={() => setStatusFilter(f)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors capitalize ${
+                statusFilter === f
+                  ? 'bg-chess-accent text-white border-chess-accent font-medium'
+                  : 'border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+
+        <span className="text-slate-700 text-xs ml-auto">Sort:</span>
+        <div className="flex gap-0.5">
+          <SortBtn field="newest" label="Date" />
+          <SortBtn field="result" label="Result" />
+          <SortBtn field="opening" label="Opening" />
         </div>
       </div>
 
@@ -117,7 +214,9 @@ export default function GameList({ games, userId, onAnalyzed }) {
 
       {/* Game rows */}
       <div className="max-h-96 overflow-y-auto divide-y divide-slate-800">
-        {games.map(game => (
+        {displayedGames.length === 0 ? (
+          <div className="p-6 text-center text-slate-500 text-sm">No games match the current filters.</div>
+        ) : displayedGames.map(game => (
           <div
             key={game.id}
             onClick={() => {
@@ -132,8 +231,7 @@ export default function GameList({ games, userId, onAnalyzed }) {
             <div className="flex-shrink-0">
               {selected.has(game.id)
                 ? <CheckCircle size={18} className="text-chess-gold" />
-                : <Circle size={18} className="text-slate-600" />
-              }
+                : <Circle size={18} className="text-slate-600" />}
             </div>
 
             <div className="flex-1 min-w-0">
@@ -146,17 +244,17 @@ export default function GameList({ games, userId, onAnalyzed }) {
                 </span>
               </div>
               <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
-                <span>{game.opening_eco || '—'}</span>
-                <span>{game.time_control || '—'}</span>
-                <span className="capitalize">{game.source?.replace('_', ' ')}</span>
+                {game.opening_eco && <span>{game.opening_eco}</span>}
+                {game.opening_name && <span className="truncate max-w-32">{game.opening_name}</span>}
+                {game.time_control && <span>{game.time_control}</span>}
+                {game.played_at && (
+                  <span>{new Date(game.played_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                )}
               </div>
             </div>
 
-            {/* Action icon — analyzed games get a dropdown, others get a status icon */}
-            <div
-              className="flex-shrink-0 relative"
-              onClick={e => e.stopPropagation()}
-            >
+            {/* Action dropdown for analyzed games */}
+            <div className="flex-shrink-0 relative" onClick={e => e.stopPropagation()}>
               {game.has_analysis ? (
                 <>
                   <button
@@ -169,27 +267,24 @@ export default function GameList({ games, userId, onAnalyzed }) {
 
                   {openDropdown === game.id && (
                     <>
-                      {/* Backdrop to close on outside click */}
-                      <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setOpenDropdown(null)}
-                      />
+                      <div className="fixed inset-0 z-40" onClick={() => setOpenDropdown(null)} />
                       <div className="absolute right-0 top-8 z-50 bg-slate-800 border border-slate-600 rounded-lg shadow-xl w-48 overflow-hidden">
                         <button
-                          onClick={() => {
-                            setOpenDropdown(null)
-                            navigate(`/coaching/${game.id}`, { state: { userId } })
-                          }}
+                          onClick={() => { setOpenDropdown(null); navigate(`/game/${game.id}`) }}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-left"
+                        >
+                          <Eye size={14} className="text-chess-gold flex-shrink-0" />
+                          Review Game
+                        </button>
+                        <button
+                          onClick={() => { setOpenDropdown(null); navigate(`/coaching/${game.id}`, { state: { userId } }) }}
                           className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-left"
                         >
                           <BookOpen size={14} className="text-chess-gold flex-shrink-0" />
                           Analyse with Coach
                         </button>
                         <button
-                          onClick={() => {
-                            setOpenDropdown(null)
-                            navigate(`/self-analysis/${game.id}`)
-                          }}
+                          onClick={() => { setOpenDropdown(null); navigate(`/self-analysis/${game.id}`) }}
                           className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-left"
                         >
                           <PenLine size={14} className="text-chess-gold flex-shrink-0" />
@@ -216,24 +311,15 @@ export default function GameList({ games, userId, onAnalyzed }) {
             ? <span className="flex items-center gap-1 text-chess-gold">
                 <Loader2 size={12} className="animate-spin" /> Analyzing in background…
               </span>
-            : `${selected.size} selected`
-          }
+            : `${selected.size} selected`}
         </span>
         <button
           onClick={handleAnalyze}
           disabled={submitting || analysisRunning || selected.size === 0}
           className="flex items-center gap-2 bg-chess-gold text-chess-dark font-semibold px-4 py-2 rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity text-sm"
         >
-          {submitting
-            ? <Loader2 size={16} className="animate-spin" />
-            : <Zap size={16} />
-          }
-          {submitting
-            ? 'Starting…'
-            : analysisRunning
-              ? 'Running…'
-              : `Analyze ${selected.size > 0 ? selected.size + ' ' : ''}Games`
-          }
+          {submitting ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+          {submitting ? 'Starting…' : analysisRunning ? 'Running…' : `Analyze ${selected.size > 0 ? selected.size + ' ' : ''}Games`}
         </button>
       </div>
 

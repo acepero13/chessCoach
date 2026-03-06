@@ -18,6 +18,9 @@ export const importPgn = (username, file) => {
   return api.post(`/games/import/pgn?username=${encodeURIComponent(username)}`, form)
 }
 
+export const getGame = (gameId) =>
+  api.get(`/games/${gameId}`)
+
 export const listGames = (userId) =>
   api.get(`/games/list/${userId}`)
 
@@ -39,6 +42,12 @@ export const getLatestProfile = (userId) =>
 
 export const selectGames = (userId, n = 7) =>
   api.get(`/profile/${userId}/select-games`, { params: { n } })
+
+export const getProfileHistory = (userId) =>
+  api.get(`/profile/${userId}/history`)
+
+export const getPatternStats = (userId) =>
+  api.get(`/profile/${userId}/pattern-stats`)
 
 // Coaching
 export const startSession = (userId, gameId) =>
@@ -87,3 +96,7 @@ export const submitCoachReviewReply = (sessionId, payload) =>
 
 export const listUserSessions = (userId) =>
   api.get(`/selfanalysis/user/${userId}/sessions`)
+
+// Admin
+export const resetDatabase = () =>
+  api.delete('/admin/reset')

@@ -45,28 +45,42 @@ class Pattern:
 
 def _is_hanging(board: chess.Board, square: chess.Square) -> bool:
     """
-    Return True if piece on square can be captured profitably.
-    Checks whether the cheapest attacker is worth less than the target piece,
-    or the piece is completely undefended. Count-only comparisons (attackers >= defenders)
-    are insufficient because they ignore piece values.
+    Return True if the piece on `square` can be captured profitably by the
+    side to move (board.turn).
+
+    Uses generate_legal_moves() instead of board.attackers() so that pinned
+    attackers are correctly excluded — a pinned piece cannot legally capture
+    even if it geometrically attacks the square.
+
+    Profitable = cheapest legal attacker is worth less than the target,
+    or the target is completely undefended (any capture wins material).
     """
     piece = board.piece_at(square)
     if piece is None:
         return False
-    attackers = board.attackers(not piece.color, square)
-    if len(attackers) == 0:
-        return False
-    defenders = board.attackers(piece.color, square)
-    if len(defenders) == 0:
-        return True  # undefended and attacked — always hanging
-    # Hanging if the cheapest attacker is less valuable than the target piece
+
     piece_val = PIECE_VALUES.get(piece.piece_type, 0)
-    min_attacker_val = min(
-        PIECE_VALUES.get(board.piece_at(sq).piece_type, 100)
-        for sq in attackers
-        if board.piece_at(sq) is not None
-    )
-    return min_attacker_val < piece_val
+    if piece_val == 0:
+        return False
+
+    # Find the minimum-value LEGAL capture of this square by board.turn.
+    # generate_legal_moves respects pins, checks, and other constraints.
+    min_cap_val = float('inf')
+    for move in board.generate_legal_moves(to_mask=chess.BB_SQUARES[square]):
+        attacker = board.piece_at(move.from_square)
+        if attacker is not None:
+            cap_val = PIECE_VALUES.get(attacker.piece_type, 100)
+            if cap_val < min_cap_val:
+                min_cap_val = cap_val
+
+    if min_cap_val == float('inf'):
+        return False  # no legal capture exists (e.g. all attackers are pinned)
+
+    defenders = board.attackers(piece.color, square)
+    if not defenders:
+        return True  # completely undefended — any legal capture wins
+
+    return min_cap_val < piece_val
 
 
 def _move_creates_fork(board: chess.Board, move: chess.Move) -> bool:
@@ -226,11 +240,16 @@ def detect_tactical_patterns(move_evals: list[MoveEval]) -> list[dict]:
         #    of a piece that is genuinely hanging (undefended/underdefended).
         #    Do NOT fire just because some hanging piece exists elsewhere on the board;
         #    the engine must confirm that capturing it was the right choice.
-        if ev.centipawn_loss > 50:
+        #    Only flag minor pieces and above (value >= 3); missing a hanging pawn is
+        #    common and rarely decisive enough to report as a distinct motif.
+        if ev.centipawn_loss > 100:
             user_move = chess.Move.from_uci(ev.move_uci)
+            target_piece = board.piece_at(best_move.to_square)
+            target_val = PIECE_VALUES.get(target_piece.piece_type, 0) if target_piece else 0
             if (
                 board.is_capture(best_move)           # engine's best IS a capture
                 and not board.is_capture(user_move)   # user did not capture
+                and target_val >= 3                   # only minor pieces and above
                 and _is_hanging(board, best_move.to_square)  # captured piece is hanging
             ):
                 patterns.append({
