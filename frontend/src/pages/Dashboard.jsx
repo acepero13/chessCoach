@@ -8,6 +8,7 @@ import {
 import ScoreRadar from '../components/ScoreRadar'
 import GameImport from '../components/GameImport'
 import GameList from '../components/GameList'
+import PatternDrillModal from '../components/PatternDrillModal'
 import {
   listGames, getLatestProfile, computeProfile, selectGames,
   getProfileHistory, getPatternStats, getProgress, resetDatabase,
@@ -65,6 +66,9 @@ export default function Dashboard({ userId, username, setUser }) {
   const [patternStats, setPatternStats] = useState(null)
   const [progress, setProgress] = useState(null)
   const [insightsLoading, setInsightsLoading] = useState(false)
+
+  // Pattern drill modal
+  const [drillPattern, setDrillPattern] = useState(null) // { type, totalGames }
 
   const fetchData = async (uid) => {
     if (!uid) return
@@ -310,7 +314,11 @@ export default function Dashboard({ userId, username, setUser }) {
 
             {/* Recurring problems — always visible on overview if data exists */}
             {progress?.recurring_patterns?.length > 0 && (
-              <RecurringProblemsCard patterns={progress.recurring_patterns} totalGames={progress.total_games} />
+              <RecurringProblemsCard
+                patterns={progress.recurring_patterns}
+                totalGames={progress.total_games}
+                onDrill={(type) => setDrillPattern({ type, totalGames: progress.total_games })}
+              />
             )}
           </div>
         )}
@@ -322,6 +330,7 @@ export default function Dashboard({ userId, username, setUser }) {
             progress={progress}
             loading={insightsLoading}
             onRefresh={() => fetchInsights(userId)}
+            onDrill={(type) => setDrillPattern({ type, totalGames: progress?.total_games })}
           />
         )}
 
@@ -333,13 +342,23 @@ export default function Dashboard({ userId, username, setUser }) {
           <GameList games={games} userId={userId} onAnalyzed={() => fetchData(userId)} />
         )}
       </div>
+
+      {/* Pattern drill modal */}
+      {drillPattern && (
+        <PatternDrillModal
+          userId={userId}
+          patternType={drillPattern.type}
+          totalGames={drillPattern.totalGames}
+          onClose={() => setDrillPattern(null)}
+        />
+      )}
     </div>
   )
 }
 
 // ── Insights tab ─────────────────────────────────────────────────────────────
 
-function InsightsTab({ profileHistory, patternStats, progress, loading, onRefresh }) {
+function InsightsTab({ profileHistory, patternStats, progress, loading, onRefresh, onDrill }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -377,7 +396,11 @@ function InsightsTab({ profileHistory, patternStats, progress, loading, onRefres
     <div className="space-y-6">
       {/* Recurring problems callout */}
       {progress?.recurring_patterns?.length > 0 && (
-        <RecurringProblemsCard patterns={progress.recurring_patterns} totalGames={progress.total_games} />
+        <RecurringProblemsCard
+          patterns={progress.recurring_patterns}
+          totalGames={progress.total_games}
+          onDrill={onDrill}
+        />
       )}
 
       {/* Score history */}
@@ -516,32 +539,44 @@ const PATTERN_LABEL = {
   bishop_knight_trade_bad: 'Poor B×N trade',
 }
 
-function RecurringProblemsCard({ patterns, totalGames }) {
+function RecurringProblemsCard({ patterns, totalGames, onDrill }) {
   return (
     <div className="bg-chess-panel border border-red-900/40 rounded-xl p-4">
-      <h2 className="text-lg font-semibold text-red-400 mb-1">Recurring Problems</h2>
+      <div className="flex items-start justify-between mb-1">
+        <h2 className="text-lg font-semibold text-red-400">Recurring Problems</h2>
+        <span className="text-xs text-slate-500 mt-1">Click a pattern to review positions</span>
+      </div>
       <p className="text-xs text-slate-500 mb-4">
-        Patterns that appeared in your games — across {totalGames} analyzed game{totalGames !== 1 ? 's' : ''}.
+        Patterns detected in your own moves — across {totalGames} analyzed game{totalGames !== 1 ? 's' : ''}.
       </p>
       <div className="space-y-3">
         {patterns.map((p) => {
           const label = PATTERN_LABEL[p.type] || p.type.replace(/_/g, ' ')
           const barPct = Math.min(100, p.pct)
           return (
-            <div key={p.type}>
+            <button
+              key={p.type}
+              onClick={() => onDrill?.(p.type)}
+              className="w-full text-left group"
+            >
               <div className="flex items-center justify-between mb-1">
-                <span className="text-sm text-slate-200">{label}</span>
+                <span className="text-sm text-slate-200 group-hover:text-white transition-colors">
+                  {label}
+                  <span className="ml-2 text-xs text-slate-600 group-hover:text-chess-gold transition-colors opacity-0 group-hover:opacity-100">
+                    → review positions
+                  </span>
+                </span>
                 <span className="text-xs text-slate-400">
                   {p.games} game{p.games !== 1 ? 's' : ''} ({p.pct}%)
                 </span>
               </div>
               <div className="bg-slate-700 rounded-full h-1.5">
                 <div
-                  className="h-1.5 rounded-full bg-red-500 transition-all"
+                  className="h-1.5 rounded-full bg-red-500 transition-all group-hover:bg-red-400"
                   style={{ width: `${barPct}%` }}
                 />
               </div>
-            </div>
+            </button>
           )
         })}
       </div>

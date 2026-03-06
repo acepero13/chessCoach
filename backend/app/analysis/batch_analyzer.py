@@ -48,6 +48,7 @@ async def analyze_game(game_id: int, pgn_text: str, depth: int) -> GameAnalysis:
             "is_check": e.is_check,
             "move_number": e.move_number,
             "color": e.color,
+            "pv_san": e.pv_san or [],
         }
         for e in move_evals
     ]

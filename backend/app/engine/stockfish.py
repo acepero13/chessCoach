@@ -29,6 +29,7 @@ class MoveEval:
     is_check: bool
     move_number: int
     color: str                  # "white" or "black"
+    pv_san: list = None         # engine principal variation in SAN (up to 5 moves)
 
 
 def _pov_cp(score: chess.engine.PovScore, color: chess.Color) -> float:
@@ -144,9 +145,11 @@ class StockfishEngine:
             info_after = infos[i + 1]
 
             # Best move and its eval (from mover's perspective)
-            best_move_obj = info_before.get("pv", [move])[0]
+            pv_moves = info_before.get("pv", [move])
+            best_move_obj = pv_moves[0]
             best_move_san = boards[i].san(best_move_obj)
             eval_best = _pov_cp(info_before["score"], color)
+            pv_san = _pv_uci_to_san_board(boards[i], pv_moves[:5])
 
             # Eval of position after actual move, from the original mover's perspective
             # info_after is from the opponent's (not color) perspective, so negate
@@ -170,6 +173,7 @@ class StockfishEngine:
                 is_check=is_check,
                 move_number=boards[i].fullmove_number,
                 color=color_str,
+                pv_san=pv_san,
             ))
             board.push(move)
 

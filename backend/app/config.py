@@ -11,7 +11,8 @@ class Settings(BaseSettings):
 
     ollama_host: str = "http://localhost:11434"
     #ollama_model: str = "gemma3:12b"
-    ollama_model: str = "qwen-optimized:latest"
+    #ollama_model: str = "qwen-optimized:latest"
+    ollama_model: str = "qwen3.5:9b"
 
     lichess_api_base: str = "https://lichess.org/api"
     chessdotcom_api_base: str = "https://api.chess.com/pub"

@@ -52,6 +52,22 @@ export const getPatternStats = (userId) =>
 export const getProgress = (userId) =>
   api.get(`/profile/${userId}/progress`)
 
+export const getPatternDrill = (userId, patternType) =>
+  api.get(`/profile/${userId}/pattern-drill`, { params: { pattern_type: patternType } })
+
+export const getPatternTip = (userId, patternType, samplePositions) =>
+  api.post(`/profile/${userId}/pattern-tip`, { pattern_type: patternType, sample_positions: samplePositions })
+
+export const getPatternExplain = (userId, patternType, position) =>
+  api.post(`/profile/${userId}/pattern-explain`, {
+    pattern_type: patternType,
+    user_move_san: position.user_move_san,
+    best_move_san: position.best_move_san,
+    engine_pv_san: position.engine_pv_san || [],
+    tactic_explanation: position.tactic_explanation || '',
+    centipawn_loss: position.centipawn_loss || 0,
+  })
+
 // Coaching
 export const startSession = (userId, gameId) =>
   api.post('/coaching/session/start', { user_id: userId, game_id: gameId })

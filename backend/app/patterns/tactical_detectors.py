@@ -106,7 +106,7 @@ def _move_creates_fork(board: chess.Board, move: chess.Move) -> bool:
             piece
             and piece.color != color
             and piece.piece_type in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
-            and test.is_attacked_by(color, sq)
+            and bool(test.attacks(landing) & chess.BB_SQUARES[sq])
         ):
             target_val = PIECE_VALUES.get(piece.piece_type, 0)
             # Count only if capture would be profitable OR target is hanging

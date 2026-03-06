@@ -86,6 +86,87 @@ async def _call_ollama(
         return None
 
 
+PATTERN_TIP_NAMES = {
+    "hanging_piece_missed": "missing hanging pieces",
+    "missed_fork": "missing fork opportunities",
+    "missed_pin": "missing pin opportunities",
+    "missed_checkmate": "missing checkmate opportunities",
+    "fork": "missing fork opportunities",
+    "pin": "missing pin opportunities",
+    "pawn_structure_weakened": "weakening pawn structure",
+    "isolated_pawn_created": "creating isolated pawns",
+    "weak_squares_created": "creating weak squares",
+    "strategic_drift": "strategic drift (slow positional decline)",
+    "bishop_knight_trade_bad": "making poor bishop-knight trades",
+}
+
+
+async def explain_single_tactic(
+    pattern_type: str,
+    user_move_san: str,
+    best_move_san: str,
+    engine_pv_san: list[str],
+    tactic_explanation: str,
+    centipawn_loss: float,
+) -> str | None:
+    """
+    Explain a single tactic position concretely, grounded only in the provided engine data.
+    The LLM must not invent moves or squares beyond what is explicitly given.
+    """
+    pv_str = " ".join(engine_pv_san[:4]) if engine_pv_san else best_move_san
+    tactic_context = f" ({tactic_explanation})" if tactic_explanation else ""
+
+    prompt = (
+        f"A chess player missed the move {best_move_san} (played {user_move_san} instead, "
+        f"{centipawn_loss:.0f} cp loss). "
+        f"The engine's best continuation is: {pv_str}.{tactic_context}\n\n"
+        f"Pattern: {pattern_type.replace('_', ' ')}.\n\n"
+        f"In 2-3 sentences explain:\n"
+        f"1. Why {best_move_san} is the right move and what it achieves concretely.\n"
+        f"2. A practical visual cue or question to ask yourself to spot this pattern.\n\n"
+        f"STRICT RULES: Only reference moves and squares explicitly listed above. "
+        f"Do NOT invent any other moves, squares, or pieces. "
+        f"Do NOT generalize — explain THIS specific position only."
+    )
+    return await _call_ollama(prompt, num_predict=250, timeout=LLM_TIMEOUT_LONG)
+
+
+async def generate_pattern_tip(
+    pattern_type: str,
+    sample_positions: list[dict],
+) -> str | None:
+    """
+    Generate practical coaching tips for how to spot/avoid a recurring pattern.
+    sample_positions: list of {fen, user_move_san, best_move_san, description}
+    """
+    human_name = PATTERN_TIP_NAMES.get(pattern_type, pattern_type.replace("_", " "))
+
+    pos_text = ""
+    for i, p in enumerate(sample_positions[:3], 1):
+        pv = p.get("engine_pv_san") or []
+        pv_str = " ".join(pv[:4]) if pv else p.get("best_move_san", "?")
+        tactic = p.get("tactic_explanation", "")
+        pos_text += (
+            f"\nExample {i}: {p.get('description', '')}. "
+            f"Player played {p.get('user_move_san', '?')}, "
+            f"engine best line: {pv_str}."
+        )
+        if tactic:
+            pos_text += f" ({tactic})"
+
+    prompt = (
+        f"The student repeatedly struggles with {human_name}. "
+        f"Here are {len(sample_positions[:3])} concrete examples from their own games:{pos_text}\n\n"
+        "Give 3 practical tips (each 1-2 sentences) on:\n"
+        "1. How to spot this type of opportunity/threat BEFORE making the move — reference the engine lines above.\n"
+        "2. A mental checklist or visual cue to use at the board.\n"
+        "3. The key principle behind why this pattern matters.\n"
+        "Be concrete and actionable. No generic advice."
+    )
+
+    return await _call_ollama(prompt, num_predict=350, timeout=LLM_TIMEOUT_LONG)
+
+
 async def explain_mistake(
     move_san: str,
     best_move_san: str,
