@@ -17,7 +17,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.database import get_db
 from app.models import Game, GameAnalysis, AnnotationSession
 import asyncio
-from app.llm.explainer import explain_annotation, generate_review_comment, generate_review_reply, analyze_questionnaire
+from app.llm.explainer import explain_annotation, generate_review_comment, generate_review_reply, analyze_questionnaire, coach_chat_turn
 from app.engine.stockfish import get_engine
 from app.patterns.tactical_detectors import _is_hanging
 
@@ -651,6 +651,109 @@ class CoachReviewReplyRequest(BaseModel):
     engine_pv_san: list[str]
     coach_comment: str
     user_response: str
+
+
+class CoachChatRequest(BaseModel):
+    move_index: int
+    messages: list[dict]   # [{role: "user"|"assistant", content: str}]
+
+
+@router.post("/session/{session_id}/chat")
+async def coach_chat(
+    session_id: int,
+    req: CoachChatRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    One turn of interactive chat with the coach for a specific position.
+    The LLM can call evaluate_move and get_alternatives engine tools.
+    """
+    session_result = await db.execute(
+        select(AnnotationSession).where(AnnotationSession.id == session_id)
+    )
+    session = session_result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    analysis_result = await db.execute(
+        select(GameAnalysis).where(GameAnalysis.game_id == session.game_id)
+    )
+    analysis = analysis_result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    evals = analysis.move_evaluations or []
+    if req.move_index >= len(evals):
+        raise HTTPException(status_code=400, detail="move_index out of range")
+
+    move_eval = evals[req.move_index]
+    fen = move_eval["fen"]
+
+    patterns = _validated_patterns(
+        analysis.patterns_detected or [],
+        move_eval.get("move_number", 0),
+        fen,
+        move_eval.get("best_move_uci", ""),
+    )
+
+    position_context = {
+        "move_san":        move_eval.get("move_san", ""),
+        "classification":  move_eval.get("classification", ""),
+        "centipawn_loss":  move_eval.get("centipawn_loss", 0.0),
+        "engine_best_move": move_eval.get("best_move_san", ""),
+        "engine_pv_san":   move_eval.get("pv_san", [])[:4],
+        "patterns":        patterns,
+    }
+
+    engine = await get_engine()
+
+    async def engine_callback(tool_name: str, args: dict) -> str:
+        if tool_name == "evaluate_move":
+            move_san = args.get("move_san", "").strip()
+            if not move_san:
+                return "No move provided."
+            try:
+                board = chess.Board(fen)
+                move_obj = board.parse_san(move_san)
+                result = await engine.evaluate_move(
+                    fen=fen,
+                    move_uci=move_obj.uci(),
+                    eval_before=move_eval.get("eval_before"),
+                )
+                cp = result["centipawn_loss"]
+                cls = result["classification"]
+                return (
+                    f"{move_san}: {cls} ({cp:.0f} cp loss from best). "
+                    f"Eval after: {result['eval_after']:.0f} cp."
+                )
+            except Exception as e:
+                return f"Could not evaluate '{move_san}': {e}"
+
+        elif tool_name == "get_alternatives":
+            num = min(4, max(1, int(args.get("num_lines", 3))))
+            try:
+                lines = await engine.get_multipv(fen, num_pv=num, depth=20)
+                if not lines:
+                    return "No alternatives found."
+                parts = []
+                for line in lines:
+                    pv = " ".join(line.get("pv_san", [])[:4])
+                    cp = line.get("score_cp", 0)
+                    parts.append(f"{line['move_san']} ({cp:+.0f}cp): {pv}")
+                return "\n".join(parts)
+            except Exception as e:
+                return f"Engine error: {e}"
+
+        return f"Unknown tool: {tool_name}"
+
+    reply = await coach_chat_turn(
+        conversation=req.messages,
+        fen=fen,
+        position_context=position_context,
+        engine_callback=engine_callback,
+    )
+
+    return {"reply": reply or "Coach is unavailable — try again later."}
 
 
 @router.get("/session/{session_id}/coach-review")

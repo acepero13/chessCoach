@@ -110,6 +110,12 @@ export const getLatestSessionForGame = (gameId) =>
 export const getCoachReview = (sessionId) =>
   api.get(`/selfanalysis/session/${sessionId}/coach-review`)
 
+export const sendCoachChat = (sessionId, moveIndex, messages) =>
+  api.post(`/selfanalysis/session/${sessionId}/chat`, {
+    move_index: moveIndex,
+    messages,
+  })
+
 export const submitCoachReviewReply = (sessionId, payload) =>
   api.post(`/selfanalysis/session/${sessionId}/coach-review/reply`, payload)
 

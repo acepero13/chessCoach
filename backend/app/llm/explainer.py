@@ -101,6 +101,131 @@ PATTERN_TIP_NAMES = {
 }
 
 
+_COACH_CHAT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "evaluate_move",
+            "description": (
+                "Evaluate a specific chess move in the current position. "
+                "Use this when the student asks 'what if I played X?' or about a move "
+                "that is NOT already in the engine line provided."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "move_san": {
+                        "type": "string",
+                        "description": "The move to evaluate in Standard Algebraic Notation (e.g. 'Nf6', 'e4', 'O-O')",
+                    },
+                },
+                "required": ["move_san"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_alternatives",
+            "description": (
+                "Get the top engine-recommended alternative moves for the current position. "
+                "Use this when the student asks for alternatives, other options, or the best moves."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "num_lines": {
+                        "type": "integer",
+                        "description": "How many alternative lines to return (1-4). Default 3.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+]
+
+
+async def coach_chat_turn(
+    conversation: list[dict],
+    fen: str,
+    position_context: dict,
+    engine_callback,  # async (tool_name: str, args: dict) -> str
+) -> str | None:
+    """
+    One turn of an interactive chess coaching chat with engine tool access.
+
+    position_context keys: move_san, classification, centipawn_loss, engine_pv_san, patterns
+    engine_callback: called when the LLM requests a tool — returns a string result.
+    The LLM may call tools up to 2 rounds before giving a final answer.
+    """
+    pv_str = " ".join(position_context.get("engine_pv_san", [])[:4]) or position_context.get("engine_best_move", "")
+    patterns_str = ", ".join(
+        p["type"].replace("_", " ") for p in position_context.get("patterns", [])[:3]
+    ) or "none"
+
+    system = (
+        "You are an interactive chess coach. A student is reviewing their game with you.\n\n"
+        f"Position context:\n"
+        f"- Move played: {position_context.get('move_san', '?')} "
+        f"({position_context.get('classification', '?')}, {position_context.get('centipawn_loss', 0):.0f} cp loss)\n"
+        f"- Engine best line: {pv_str}\n"
+        f"- Detected patterns: {patterns_str}\n\n"
+        "You have two tools:\n"
+        "- evaluate_move: use when the student asks about a SPECIFIC move not already in the engine line\n"
+        "- get_alternatives: use when the student asks for other options or best moves\n\n"
+        "Rules: Only reference moves/squares you know from context or from tool results. "
+        "Never invent engine lines. Be concise (2-4 sentences per reply)."
+    )
+
+    messages = [{"role": "system", "content": system}] + conversation
+    is_thinking = _is_thinking_model()
+
+    async def _llm_call(msgs, use_tools: bool):
+        kwargs = dict(
+            model=settings.ollama_model,
+            messages=msgs,
+            options={"temperature": 0.3, "num_predict": 300},
+        )
+        if use_tools:
+            kwargs["tools"] = _COACH_CHAT_TOOLS
+        if is_thinking:
+            kwargs["think"] = False
+        return await asyncio.wait_for(_client.chat(**kwargs), timeout=LLM_TIMEOUT_LONG)
+
+    try:
+        # First call — LLM may decide to use tools
+        resp = await _llm_call(messages, use_tools=True)
+
+        # Agentic loop: execute tool calls and feed results back (max 2 rounds)
+        for _ in range(2):
+            if not resp.message.tool_calls:
+                break
+
+            # Append assistant message with tool_calls
+            messages.append(resp.message)
+
+            # Execute each requested tool and append results
+            for tc in resp.message.tool_calls:
+                tool_result = await engine_callback(
+                    tc.function.name,
+                    tc.function.arguments or {},
+                )
+                messages.append({"role": "tool", "content": tool_result})
+
+            # Ask LLM to produce the final answer now that it has tool results
+            resp = await _llm_call(messages, use_tools=False)
+
+        return _strip_thinking(resp.message.content.strip())
+
+    except asyncio.TimeoutError:
+        print("[llm] coach_chat_turn timed out")
+        return None
+    except Exception as exc:
+        print(f"[llm] coach_chat_turn error: {exc}")
+        return None
+
+
 async def explain_single_tactic(
     pattern_type: str,
     user_move_san: str,

@@ -11,7 +11,7 @@ import {
 } from 'recharts'
 import {
   startAnnotationSession, submitAnnotation, saveDraftAnnotation, completeAnnotationSession,
-  getLatestSessionForGame, getCoachReview, submitCoachReviewReply,
+  getLatestSessionForGame, getCoachReview, submitCoachReviewReply, sendCoachChat,
 } from '../api/client'
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -2287,14 +2287,18 @@ function CoachReviewPhase({
   userArrows,
   onBack, onDashboard,
 }) {
-  const [responseText, setResponseText] = useState('')
-  const [replying, setReplying] = useState(false)
-  const [replyError, setReplyError] = useState(null)
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const [chatError, setChatError] = useState(null)
+  // chatHistory: { [moveKey]: [{role, content}] }
+  const [chatHistory, setChatHistory] = useState({})
   const [collapseHighlight, setCollapseHighlight] = useState(false)
+  const chatEndRef = useRef(null)
 
   const item = items[reviewIdx] || null
   const moveKey = item?.move_index
   const currentResponse = reviewResponses[moveKey] || {}
+  const currentChat = chatHistory[moveKey] || []
 
   const handleCoachSquareRightClick = useCallback(({ square }) => {
     const mi = item?.move_index
@@ -2317,9 +2321,14 @@ function CoachReviewPhase({
 
   // Reset input when navigating; clear highlight animation after a moment
   useEffect(() => {
-    setResponseText(currentResponse.response || '')
-    setReplyError(null)
+    setChatInput('')
+    setChatError(null)
   }, [reviewIdx])
+
+  // Scroll to bottom when new messages arrive
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [currentChat])
 
   useEffect(() => {
     if (collapseHighlight) {
@@ -2334,30 +2343,31 @@ function CoachReviewPhase({
     setCollapseHighlight(true)
   }
 
-  const handleSendResponse = async () => {
-    if (!responseText.trim() || !item) return
-    setReplying(true)
-    setReplyError(null)
+  const handleSendChat = useCallback(async () => {
+    if (!chatInput.trim() || !item || chatLoading) return
+    const userMessage = { role: 'user', content: chatInput.trim() }
+    const updatedHistory = [...currentChat, userMessage]
+    setChatHistory(prev => ({ ...prev, [moveKey]: updatedHistory }))
+    setChatInput('')
+    setChatLoading(true)
+    setChatError(null)
     try {
-      const payload = {
-        move_index: item.move_index,
-        move_san: item.move_san,
-        engine_best_move: item.engine_best_move,
-        engine_pv_san: item.engine_pv_san,
-        coach_comment: item.coach_comment,
-        user_response: responseText.trim(),
-      }
-      const res = await submitCoachReviewReply(sessionId, payload)
-      setReviewResponses(prev => ({
+      // Send only role/content pairs (no system messages)
+      const msgs = updatedHistory.filter(m => m.role !== 'system')
+      const res = await sendCoachChat(sessionId, item.move_index, msgs)
+      const assistantMessage = { role: 'assistant', content: res.data.reply }
+      setChatHistory(prev => ({
         ...prev,
-        [moveKey]: { response: responseText.trim(), reply: res.data.coach_reply },
+        [moveKey]: [...updatedHistory, assistantMessage],
       }))
     } catch (e) {
-      setReplyError(e.response?.data?.detail || e.message)
+      setChatError(e.response?.data?.detail || e.message)
+      // Remove the optimistic user message on error
+      setChatHistory(prev => ({ ...prev, [moveKey]: currentChat }))
     } finally {
-      setReplying(false)
+      setChatLoading(false)
     }
-  }
+  }, [chatInput, item, moveKey, currentChat, chatLoading, sessionId])
 
   if (!item) {
     return (
@@ -2632,65 +2642,75 @@ function CoachReviewPhase({
               </p>
             </div>
 
-            {/* Response area */}
-            {!currentResponse.reply && (
-              <div className="bg-chess-panel rounded-xl p-4">
-                <div className="text-xs text-slate-500 mb-1.5">Your response (optional)</div>
-                <textarea
-                  value={responseText}
-                  onChange={e => setResponseText(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && e.ctrlKey) handleSendResponse()
-                  }}
-                  rows={3}
-                  placeholder="Reply to the coach's question… (Ctrl+Enter to send)"
-                  className="w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
-                />
-                {replyError && (
-                  <p className="text-red-400 text-xs mt-1">{replyError}</p>
+            {/* Chat panel */}
+            <div className="bg-chess-panel rounded-xl flex flex-col" style={{ minHeight: '220px', maxHeight: '420px' }}>
+              <div className="flex items-center gap-2 px-4 pt-3 pb-2 border-b border-slate-700">
+                <MessageSquare size={14} className="text-chess-gold" />
+                <span className="text-xs font-semibold text-chess-gold uppercase tracking-wide">Ask the coach</span>
+                {currentChat.length > 0 && (
+                  <button
+                    onClick={() => setChatHistory(prev => ({ ...prev, [moveKey]: [] }))}
+                    className="ml-auto text-xs text-slate-600 hover:text-slate-400 transition-colors"
+                  >
+                    Clear
+                  </button>
                 )}
+              </div>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0">
+                {currentChat.length === 0 && (
+                  <p className="text-xs text-slate-500 italic">
+                    Ask anything about this position — "What if I played Nf6?", "Show me the best alternatives", "Why is this a blunder?"
+                  </p>
+                )}
+                {currentChat.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap ${
+                      msg.role === 'user'
+                        ? 'bg-chess-accent text-white'
+                        : 'bg-slate-700/60 text-slate-200 border border-slate-600'
+                    }`}>
+                      {msg.role === 'assistant' && (
+                        <span className="text-xs text-chess-gold font-semibold block mb-1">Coach</span>
+                      )}
+                      {msg.content}
+                    </div>
+                  </div>
+                ))}
+                {chatLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-slate-700/60 border border-slate-600 rounded-xl px-3 py-2 text-xs text-slate-400 animate-pulse">
+                      Coach is thinking…
+                    </div>
+                  </div>
+                )}
+                {chatError && (
+                  <p className="text-xs text-red-400">{chatError}</p>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Input */}
+              <div className="px-3 pb-3 pt-2 border-t border-slate-700 flex gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleSendChat() }}
+                  placeholder="Ask anything… (Enter to send)"
+                  disabled={chatLoading}
+                  className="flex-1 bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold disabled:opacity-50"
+                />
                 <button
-                  onClick={handleSendResponse}
-                  disabled={replying || !responseText.trim()}
-                  className="mt-2 flex items-center gap-1.5 text-sm px-4 py-1.5 rounded-lg bg-chess-gold text-chess-dark font-semibold hover:opacity-90 disabled:opacity-50"
+                  onClick={handleSendChat}
+                  disabled={chatLoading || !chatInput.trim()}
+                  className="flex items-center gap-1 px-3 py-2 rounded-lg bg-chess-gold text-chess-dark font-semibold text-sm hover:opacity-90 disabled:opacity-40 transition-opacity"
                 >
                   <Send size={13} />
-                  {replying ? 'Sending…' : 'Send'}
                 </button>
               </div>
-            )}
-
-            {/* Coach reply */}
-            {currentResponse.reply && (
-              <div className="flex flex-col gap-3">
-                <div className="bg-chess-dark rounded-xl p-3 border-l-2 border-slate-600">
-                  <div className="text-xs text-slate-500 mb-1">Your response</div>
-                  <p className="text-sm text-slate-300 italic">"{currentResponse.response}"</p>
-                </div>
-                <div className="bg-chess-panel rounded-xl p-4 border border-chess-gold/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <MessageSquare size={15} className="text-chess-gold" />
-                    <span className="text-sm font-semibold text-chess-gold">Coach</span>
-                  </div>
-                  <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
-                    {currentResponse.reply}
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setReviewResponses(prev => {
-                      const next = { ...prev }
-                      delete next[moveKey]
-                      return next
-                    })
-                    setResponseText('')
-                  }}
-                  className="text-xs text-slate-500 hover:text-white self-start transition-colors"
-                >
-                  ↩ Edit response
-                </button>
-              </div>
-            )}
+            </div>
 
           </div>
         </div>
