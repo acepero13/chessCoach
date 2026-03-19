@@ -29,9 +29,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from app.config import settings as _settings
+
+_allowed_origins = [
+    f"http://localhost:{_settings.frontend_port}",
+    "http://localhost:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -3,6 +3,9 @@ from pathlib import Path
 
 
 class Settings(BaseSettings):
+    backend_port: int = 8000
+    frontend_port: int = 5173
+
     database_url: str = "sqlite+aiosqlite:///./chess_tutor.db"
     stockfish_path: str = "/usr/bin/stockfish"
     stockfish_depth: int = 18
