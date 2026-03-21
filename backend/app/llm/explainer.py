@@ -770,11 +770,135 @@ async def analyze_questionnaire(
     return " ".join(parts)
 
 
+async def generate_mental_coaching(
+    mental_errors: list[dict],
+    result: str,
+    starting_eval: float,
+    final_eval: float,
+    game_result: str,
+) -> str:
+    """
+    Generate behavior-focused coaching for a mental tutor session.
+    Focuses on decision-making patterns, not individual moves.
+    Falls back to deterministic text if Ollama unavailable.
+    """
+    if not mental_errors:
+        prompt = (
+            f"A chess player had a winning position (+{starting_eval/100:.1f} pawns) and "
+            f"{'converted it successfully' if result == 'converted' else f'ended with {final_eval/100:.1f} pawns'}. "
+            f"The actual game result was {game_result}. No mental errors detected. "
+            f"In 2 sentences: acknowledge their disciplined conversion and reinforce what they did well."
+        )
+    else:
+        error_texts = "; ".join(
+            f"{e['type'].replace('_', ' ')}: {e['description'][:100]}"
+            for e in mental_errors[:3]
+        )
+        prompt = (
+            f"A chess player had a winning position (+{starting_eval/100:.1f} pawns) "
+            f"and {'converted it' if result == 'converted' else 'failed to fully convert it'} "
+            f"(ended at +{final_eval/100:.1f}). Actual game result: {game_result}.\n\n"
+            f"Mental behavior detected: {error_texts}.\n\n"
+            f"Write 2-3 sentences of behavior-focused coaching. "
+            f"Focus on the MENTAL PATTERN, not specific moves. "
+            f"Use language like: 'You tend to rush when ahead', "
+            f"'You avoided simplification', 'After your first mistake you became unstable'. "
+            f"Do NOT say 'you played the wrong move'. Be direct and actionable."
+        )
+
+    coaching = await _call_ollama(prompt, num_predict=200, timeout=LLM_TIMEOUT_LONG)
+    if coaching:
+        return coaching
+
+    # Deterministic fallback
+    if not mental_errors:
+        return f"Good job maintaining your advantage (+{starting_eval/100:.1f} → +{final_eval/100:.1f}). Keep playing with the same discipline."
+    main_error = mental_errors[0]
+    type_labels = {
+        "rushing": "rushing your moves when ahead",
+        "relaxation": "gradual carelessness when winning",
+        "overcomplication": "overcomplicating winning positions",
+        "tilt": "making multiple errors after an initial mistake",
+    }
+    label = type_labels.get(main_error["type"], main_error["type"].replace("_", " "))
+    return f"The main pattern here was {label}. {main_error['description']}"
+
+
+def _detect_behavioral_patterns(scores: dict, raw: dict) -> list[str]:
+    """
+    Identify cross-score behavioral patterns that produce specific insights
+    (e.g. "rushes when winning") rather than just listing low scores.
+    """
+    insights = []
+
+    attack = scores.get("attack", 50)
+    conversion = scores.get("conversion", 50)
+    mental = scores.get("mental_stability", 50)
+    defense = scores.get("defense", 50)
+    opening = scores.get("opening", 50)
+    strategy = scores.get("strategy", 50)
+    endgame = scores.get("endgame", 50)
+    tactics = scores.get("tactics", 50)
+    time_mgmt = scores.get("time_management", 50)
+
+    blunders_while_winning = raw.get("blunders_while_winning", 0)
+    winning_games_total = raw.get("winning_games_total", 1) or 1
+    eval_collapses = raw.get("eval_collapses", 0)
+    blunder_clusters = raw.get("blunder_clusters", 0)
+    games = raw.get("games_analyzed", 1) or 1
+
+    # "Rush when winning" — good attack + winning positions, but fails to convert
+    if attack >= 55 and conversion < 50 and blunders_while_winning / winning_games_total > 0.4:
+        insights.append(
+            "You consistently get good positions and reach winning advantages, "
+            "but tend to lose control once ahead — rushing or relaxing prematurely."
+        )
+
+    # "Collapses after first mistake" — low mental stability + blunder clusters
+    if mental < 50 and blunder_clusters / games > 0.5:
+        insights.append(
+            "When you make one mistake you often follow it with more errors — "
+            "a tilt pattern where one bad move triggers a collapse."
+        )
+
+    # "Strong opening, weak follow-through" — good opening but strategy/endgame weak
+    if opening >= 60 and (strategy < 50 or endgame < 50):
+        insights.append(
+            "You navigate the opening well but the advantage fades as the game progresses — "
+            "strong out of the opening, but struggles in the middlegame or endgame."
+        )
+
+    # "Tactical blindness under pressure" — good defense but misses winning tactics
+    if defense >= 55 and tactics < 50:
+        insights.append(
+            "You hold well when defending under pressure, but tend to miss tactical "
+            "opportunities when it's your turn to strike."
+        )
+
+    # "Time trouble causes blunders" — time management score bad and has data
+    if time_mgmt < 50 and raw.get("has_time_data", False) and raw.get("moves_time_trouble", 0) > 0:
+        insights.append(
+            "Under time pressure your accuracy drops significantly — "
+            "blunders cluster when the clock runs low."
+        )
+
+    # "Solid but passive" — no clear weakness but nothing stands out either
+    if all(45 <= v <= 65 for v in scores.values()) and not insights:
+        insights.append(
+            "Your play is fairly balanced — no catastrophic weakness, "
+            "but also no dominant strength. The priority is building a sharper, more decisive style."
+        )
+
+    return insights
+
+
 async def generate_batch_summary(
     scores: dict,
     top_patterns: list[dict],
     games_analyzed: int,
+    raw_metrics: dict = None,
 ) -> str:
+    raw = raw_metrics or {}
     weaknesses = [k for k, v in sorted(scores.items(), key=lambda x: x[1])[:3]]
     strengths = [k for k, v in sorted(scores.items(), key=lambda x: x[1], reverse=True)[:2]]
 
@@ -785,6 +909,9 @@ async def generate_batch_summary(
     top_issues = sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True)[:3]
     issues_text = ", ".join(f"{k.replace('_', ' ')} ({v}x)" for k, v in top_issues) or "none detected"
 
+    behavioral = _detect_behavioral_patterns(scores, raw)
+    behavioral_text = "\n".join(f"- {b}" for b in behavioral) if behavioral else ""
+
     prompt = f"""Chess performance data from {games_analyzed} games:
 
 Scores (0–100):
@@ -793,21 +920,30 @@ Scores (0–100):
 Biggest weaknesses: {', '.join(weaknesses)}
 Biggest strengths: {', '.join(strengths)}
 Most frequent issues: {issues_text}
+"""
+    if behavioral_text:
+        prompt += f"""
+Behavioral patterns detected (use these as the narrative backbone — this is what the player ACTUALLY does):
+{behavioral_text}
+"""
 
-Write a 3-paragraph coaching summary:
-1. Overall assessment of the player's style and level
-2. The 2–3 most critical areas to improve with specific observations
-3. Encouragement and the single most important focus for next training cycle
+    prompt += """
+Write a 3-paragraph coaching summary. Be specific and direct — avoid generic "you should improve X" statements:
+1. Describe the player's style using the behavioral patterns above. Tell a story about HOW they play, not just what score is low.
+2. Identify the 2 most critical areas to address, grounded in the patterns. What specifically happens, and why does it hurt?
+3. One clear, actionable focus for the next training cycle.
 
-Base everything strictly on the numbers above."""
+Base everything strictly on the data above. Do not invent behaviors not supported by the numbers."""
 
-    result = await _call_ollama(prompt, num_predict=400, timeout=LLM_TIMEOUT_LONG)
+    result = await _call_ollama(prompt, num_predict=500, timeout=LLM_TIMEOUT_LONG)
     if result is None:
         score_lines = "\n".join(f"- {k}: {v:.0f}/100" for k, v in scores.items())
+        behavioral_fallback = "\n".join(f"- {b}" for b in behavioral) if behavioral else ""
         return (
             f"Analysis of {games_analyzed} games complete.\n\n"
             f"**Scores:**\n{score_lines}\n\n"
-            f"**Focus areas:** {', '.join(weaknesses)}\n"
+            + (f"**Key patterns:**\n{behavioral_fallback}\n\n" if behavioral_fallback else "")
+            + f"**Focus areas:** {', '.join(weaknesses)}\n"
             f"**Strengths:** {', '.join(strengths)}\n\n"
             "(AI narrative unavailable — Ollama not reachable)"
         )

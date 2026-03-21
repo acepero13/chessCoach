@@ -147,3 +147,43 @@ class AnnotationSession(Base):
     completed = Column(Boolean, default=False)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)
+
+
+class CoachMemory(Base):
+    """Persistent coach memory — what the coach knows about this player across sessions."""
+    __tablename__ = "coach_memory"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+
+    # Coach's evolving understanding of the player
+    player_narrative = Column(Text)                  # 1-2 sentence coach note: who is this player
+    recurring_patterns = Column(JSON, default=list)  # ["rushes when winning", "misses forks", ...]
+    last_session_focus = Column(JSON)                # {patterns, key_lesson, game_id, session_number}
+    previous_scores = Column(JSON)                   # last known profile scores for delta computation
+
+    sessions_completed = Column(Integer, default=0)
+    training_plan_pending = Column(Boolean, default=False)  # plan assigned but not acknowledged
+    last_seen = Column(DateTime)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MentalTutorSession(Base):
+    __tablename__ = "mental_tutor_sessions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=True)
+    starting_fen = Column(Text, nullable=False)
+    starting_eval = Column(Float)
+    user_color = Column(String(5))
+    max_moves = Column(Integer, default=6)
+    moves_data = Column(JSON, default=list)
+    eval_progression = Column(JSON, default=list)
+    mental_errors = Column(JSON, default=list)
+    result = Column(String(20), default="in_progress")  # "converted"/"failed"/"partial"/"in_progress"
+    coaching = Column(Text)
+    game_result = Column(String(10))  # actual game result
+    completed = Column(Boolean, default=False)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime)

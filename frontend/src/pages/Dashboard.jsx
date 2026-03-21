@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, Target, Calendar, RefreshCw, ChevronRight, PenLine, History, Trash2, AlertTriangle } from 'lucide-react'
+import { BookOpen, Target, Calendar, RefreshCw, ChevronRight, PenLine, History, Trash2, AlertTriangle, Brain } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   BarChart, Bar, Cell, ResponsiveContainer,
@@ -261,11 +261,12 @@ export default function Dashboard({ userId, username, setUser }) {
 
         {/* Action cards */}
         {profile && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
             <ActionCard icon={<BookOpen size={20} />} title="Start Coaching Session" description="Review your most instructive games interactively" onClick={handleStartCoaching} />
             <ActionCard icon={<PenLine size={20} />} title="Self-Analysis" description="Annotate your own moves before the engine reveals" onClick={handleStartSelfAnalysis} />
             <ActionCard icon={<Calendar size={20} />} title="Create Training Plan" description="Get a 4-week plan based on your weaknesses" onClick={() => navigate('/training')} />
             <ActionCard icon={<History size={20} />} title="Reviewed Games" description="See all your self-analysis sessions and scores" onClick={() => navigate('/reviewed-games')} />
+            <ActionCard icon={<Brain size={20} />} title="Mental Tutor" description="Practice converting winning positions under pressure" onClick={() => navigate('/mental-tutor')} />
           </div>
         )}
 

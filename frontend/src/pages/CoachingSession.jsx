@@ -1,8 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { Chessboard } from 'react-chessboard'
-import { Send, ChevronLeft, Lightbulb, Eye, Trophy, ChevronDown, ChevronUp, Brain } from 'lucide-react'
-import { startSession, submitAnswer } from '../api/client'
+import {
+  Send, ChevronLeft, Lightbulb, Eye, Trophy,
+  ChevronDown, ChevronUp, Brain, MessageSquare, ArrowRight,
+} from 'lucide-react'
+import { startSession, submitAnswer, closeCoachingSession } from '../api/client'
+
+// ── Markdown renderer ─────────────────────────────────────────────────────────
 
 function inlineMarkdown(text) {
   const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g)
@@ -38,10 +43,12 @@ function Md({ text, className = '' }) {
 function classificationClass(c) {
   const map = {
     best: 'move-best', good: 'move-good',
-    inaccuracy: 'move-inaccuracy', mistake: 'move-mistake', blunder: 'move-blunder'
+    inaccuracy: 'move-inaccuracy', mistake: 'move-mistake', blunder: 'move-blunder',
   }
   return map[c] || ''
 }
+
+// ── Thinking capture panel ────────────────────────────────────────────────────
 
 function ThinkingCapturePanel({ candidateMoves, onSubmit, onSkip, submitting }) {
   const [selected, setSelected] = useState([])
@@ -52,9 +59,7 @@ function ThinkingCapturePanel({ candidateMoves, onSubmit, onSkip, submitting }) 
     setSelected(prev =>
       prev.includes(san)
         ? prev.filter(m => m !== san)
-        : prev.length < 3
-          ? [...prev, san]
-          : prev
+        : prev.length < 3 ? [...prev, san] : prev
     )
   }
 
@@ -115,14 +120,63 @@ function ThinkingCapturePanel({ candidateMoves, onSubmit, onSkip, submitting }) 
   )
 }
 
+// ── Coach opening screen ──────────────────────────────────────────────────────
+
+function CoachOpeningScreen({ coachOpening, gameArc, totalCritical, onStart }) {
+  return (
+    <div className="min-h-screen bg-chess-dark flex flex-col items-center justify-center p-6">
+      <div className="max-w-lg w-full flex flex-col gap-5">
+
+        {/* Coach message */}
+        <div className="bg-chess-panel rounded-2xl p-6 border border-slate-700">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-8 h-8 rounded-full bg-chess-gold/20 border border-chess-gold/40 flex items-center justify-center">
+              <Brain size={16} className="text-chess-gold" />
+            </div>
+            <span className="text-chess-gold font-semibold text-sm">Your Coach</span>
+          </div>
+          <p className="text-white leading-relaxed text-[15px]">{coachOpening}</p>
+        </div>
+
+        {/* Game arc */}
+        {gameArc && (
+          <div className="bg-chess-dark rounded-xl p-4 border border-slate-700/60">
+            <div className="flex items-center gap-2 mb-2">
+              <MessageSquare size={13} className="text-slate-400" />
+              <span className="text-xs text-slate-400 font-medium uppercase tracking-wide">How this game went</span>
+            </div>
+            <p className="text-slate-300 text-sm leading-relaxed">{gameArc}</p>
+          </div>
+        )}
+
+        {/* Start button */}
+        <button
+          onClick={onStart}
+          className="flex items-center justify-center gap-2 bg-chess-gold text-chess-dark font-bold px-6 py-3.5 rounded-xl hover:opacity-90 transition-opacity text-base"
+        >
+          Review {totalCritical} critical position{totalCritical !== 1 ? 's' : ''}
+          <ArrowRight size={18} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export default function CoachingSession() {
   const { gameId } = useParams()
   const { state } = useLocation()
   const navigate = useNavigate()
 
   const userId = state?.userId || 1
+
+  // phases: 'loading' | 'opening' | 'question' | 'revealed' | 'complete'
+  const [phase, setPhase] = useState('loading')
+
   const [sessionId, setSessionId] = useState(null)
-  const [phase, setPhase] = useState('question') // 'question' | 'revealed' | 'complete'
+  const [coachOpening, setCoachOpening] = useState(null)
+  const [gameArc, setGameArc] = useState(null)
   const [position, setPosition] = useState(null)
   const [question, setQuestion] = useState(null)
   const [hint, setHint] = useState(null)
@@ -130,11 +184,11 @@ export default function CoachingSession() {
   const [candidateMoves, setCandidateMoves] = useState([])
   const [revealed, setRevealed] = useState(null)
   const [progress, setProgress] = useState(null)
-  const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
   const [sessionSummary, setSessionSummary] = useState(null)
-  const [summaryExpanded, setSummaryExpanded] = useState(true)
+  const [summaryExpanded, setSummaryExpanded] = useState(false)
+  const closedRef = useRef(false)
 
   useEffect(() => {
     const init = async () => {
@@ -147,20 +201,30 @@ export default function CoachingSession() {
           return
         }
         setSessionId(data.session_id)
+        setCoachOpening(data.coach_opening || null)
+        setGameArc(data.game_arc || null)
+        setSessionSummary(data.session_summary || null)
         setPosition(data.current_position)
         setQuestion(data.question)
         setHint(data.hint)
         setCandidateMoves(data.candidate_moves || [])
         setProgress({ reviewed: 0, total: data.total_critical_moves })
-        setSessionSummary(data.session_summary || null)
+        // If we have a coach opening, show it first; else go straight to questions
+        setPhase(data.coach_opening ? 'opening' : 'question')
       } catch (e) {
         setError(e.response?.data?.detail || e.message)
-      } finally {
-        setLoading(false)
+        setPhase('complete')
       }
     }
     init()
   }, [gameId, userId])
+
+  // Update coach memory when session is complete or user navigates away
+  const closeSession = async (sid) => {
+    if (!sid || closedRef.current) return
+    closedRef.current = true
+    try { await closeCoachingSession(sid) } catch (_) {}
+  }
 
   const handleSubmitAnswer = async (selectedMoves, reasoning, skipped = false) => {
     if (!sessionId) return
@@ -171,8 +235,13 @@ export default function CoachingSession() {
       const data = res.data
       setRevealed(data)
       setProgress(data.progress)
-      setPhase(data.completed ? 'complete' : 'revealed')
-      setSummaryExpanded(false)  // collapse summary once reviewing starts
+      if (data.completed) {
+        await closeSession(sessionId)
+        setPhase('complete')
+      } else {
+        setPhase('revealed')
+        setSummaryExpanded(false)
+      }
     } catch (e) {
       setError(e.response?.data?.detail || e.message)
     } finally {
@@ -182,10 +251,6 @@ export default function CoachingSession() {
 
   const handleNext = () => {
     if (!revealed) return
-    if (revealed.completed) {
-      setPhase('complete')
-      return
-    }
     setPosition(revealed.next_position)
     setQuestion(revealed.next_question?.question)
     setHint(revealed.next_question?.hint)
@@ -195,22 +260,37 @@ export default function CoachingSession() {
     setPhase('question')
   }
 
-  if (loading) {
+  // ── Loading ────────────────────────────────────────────────────────────────
+  if (phase === 'loading') {
     return (
       <div className="min-h-screen bg-chess-dark flex items-center justify-center">
-        <div className="text-chess-gold text-lg animate-pulse">Loading coaching session…</div>
+        <div className="text-chess-gold text-lg animate-pulse">Preparing your session…</div>
       </div>
     )
   }
 
+  // ── Coach opening ──────────────────────────────────────────────────────────
+  if (phase === 'opening') {
+    return (
+      <CoachOpeningScreen
+        coachOpening={coachOpening}
+        gameArc={gameArc}
+        totalCritical={progress?.total || 0}
+        onStart={() => setPhase('question')}
+      />
+    )
+  }
+
+  // ── Complete ───────────────────────────────────────────────────────────────
   if (phase === 'complete') {
     return (
       <div className="min-h-screen bg-chess-dark flex flex-col items-center justify-center gap-6 p-6">
         <Trophy size={48} className="text-chess-gold" />
-        <h2 className="text-2xl font-bold text-white">Session Complete!</h2>
+        <h2 className="text-2xl font-bold text-white">Session Complete</h2>
         {progress && (
-          <p className="text-slate-400">
-            Reviewed {progress.reviewed} critical positions.
+          <p className="text-slate-400 text-center max-w-xs">
+            You reviewed {progress.reviewed} critical position{progress.reviewed !== 1 ? 's' : ''}.
+            Your coach has noted the patterns for next time.
           </p>
         )}
         {error && <p className="text-red-400 text-sm">{error}</p>}
@@ -224,13 +304,15 @@ export default function CoachingSession() {
     )
   }
 
+  // ── Review ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-chess-dark p-4">
       <div className="max-w-5xl mx-auto">
+
         {/* Top bar */}
         <div className="flex items-center justify-between mb-4">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => { closeSession(sessionId); navigate('/') }}
             className="flex items-center gap-1 text-slate-400 hover:text-white text-sm"
           >
             <ChevronLeft size={16} /> Dashboard
@@ -242,7 +324,7 @@ export default function CoachingSession() {
           )}
         </div>
 
-        {/* Session summary */}
+        {/* Collapsible coach summary */}
         {sessionSummary && (
           <div className="mb-4 bg-chess-panel rounded-xl overflow-hidden border border-slate-700">
             <button
@@ -301,63 +383,61 @@ export default function CoachingSession() {
 
           {/* Right panel */}
           <div className="flex flex-col gap-4">
+
             {/* Question */}
-            <div className="bg-chess-panel rounded-xl p-4">
-              <p className="text-white font-medium mb-3">{question}</p>
+            {phase === 'question' && (
+              <div className="bg-chess-panel rounded-xl p-4">
+                <p className="text-white font-medium mb-3">{question}</p>
 
-              {/* Hint */}
-              {hint && (
-                <div className="mb-3">
-                  {showHint ? (
-                    <div className="p-3 bg-chess-accent/30 rounded-lg text-slate-300 text-sm">
-                      <span className="text-chess-gold font-medium">Hint: </span>{hint}
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setShowHint(true)}
-                      className="flex items-center gap-1 text-xs text-slate-500 hover:text-chess-gold transition-colors"
-                    >
-                      <Lightbulb size={14} /> Show hint
-                    </button>
-                  )}
-                </div>
-              )}
+                {hint && (
+                  <div className="mb-3">
+                    {showHint ? (
+                      <div className="p-3 bg-chess-accent/30 rounded-lg text-slate-300 text-sm">
+                        <span className="text-chess-gold font-medium">Hint: </span>{hint}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setShowHint(true)}
+                        className="flex items-center gap-1 text-xs text-slate-500 hover:text-chess-gold transition-colors"
+                      >
+                        <Lightbulb size={14} /> Show hint
+                      </button>
+                    )}
+                  </div>
+                )}
 
-              {/* Candidate moves thinking capture */}
-              {phase === 'question' && candidateMoves.length > 0 && (
-                <ThinkingCapturePanel
-                  candidateMoves={candidateMoves}
-                  onSubmit={(moves, text) => handleSubmitAnswer(moves, text)}
-                  onSkip={() => handleSubmitAnswer([], '', true)}
-                  submitting={submitting}
-                />
-              )}
-
-              {/* Fallback textarea if no candidates */}
-              {phase === 'question' && candidateMoves.length === 0 && (
-                <div className="flex flex-col gap-2">
-                  <textarea
-                    placeholder="What would you play and why? Explain your thinking — the coach will assess your reasoning, not just your move."
-                    rows={3}
-                    className="w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && e.ctrlKey) handleSubmitAnswer([], e.target.value)
-                    }}
+                {candidateMoves.length > 0 ? (
+                  <ThinkingCapturePanel
+                    candidateMoves={candidateMoves}
+                    onSubmit={(moves, text) => handleSubmitAnswer(moves, text)}
+                    onSkip={() => handleSubmitAnswer([], '', true)}
+                    submitting={submitting}
                   />
-                  <button
-                    onClick={(e) => {
-                      const ta = e.target.closest('.flex').querySelector('textarea')
-                      handleSubmitAnswer([], ta?.value || '')
-                    }}
-                    disabled={submitting}
-                    className="flex items-center justify-center gap-2 bg-chess-gold text-chess-dark font-semibold px-4 py-2 rounded-lg hover:opacity-90 disabled:opacity-50 text-sm"
-                  >
-                    {submitting ? 'Analyzing…' : <><Send size={14} /> Submit Answer</>}
-                  </button>
-                  <p className="text-xs text-slate-600">Ctrl+Enter to submit</p>
-                </div>
-              )}
-            </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      placeholder="What would you play and why? Explain your thinking — the coach will assess your reasoning."
+                      rows={3}
+                      className="w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && e.ctrlKey) handleSubmitAnswer([], e.target.value)
+                      }}
+                    />
+                    <button
+                      onClick={e => {
+                        const ta = e.target.closest('.flex').querySelector('textarea')
+                        handleSubmitAnswer([], ta?.value || '')
+                      }}
+                      disabled={submitting}
+                      className="flex items-center justify-center gap-2 bg-chess-gold text-chess-dark font-semibold px-4 py-2 rounded-lg hover:opacity-90 disabled:opacity-50 text-sm"
+                    >
+                      {submitting ? 'Analyzing…' : <><Send size={14} /> Submit Answer</>}
+                    </button>
+                    <p className="text-xs text-slate-600">Ctrl+Enter to submit</p>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Revealed explanation */}
             {revealed && phase === 'revealed' && (
@@ -367,7 +447,7 @@ export default function CoachingSession() {
                   <span className="font-semibold text-chess-gold">Engine Reveals</span>
                 </div>
 
-                {/* User's candidate moves selected */}
+                {/* Candidate moves selected */}
                 {revealed.candidate_moves_selected?.length > 0 && (
                   <div className="bg-chess-dark rounded-lg p-3 border-l-2 border-slate-600">
                     <div className="text-xs text-slate-500 mb-1">Your candidates</div>
@@ -388,7 +468,6 @@ export default function CoachingSession() {
                   </div>
                 )}
 
-                {/* Show what the user wrote (if they added reasoning) */}
                 {revealed.user_answer_text && (
                   <div className="bg-chess-dark rounded-lg p-3 border-l-2 border-slate-600">
                     <div className="text-xs text-slate-500 mb-1">Your reasoning</div>
@@ -397,7 +476,6 @@ export default function CoachingSession() {
                 )}
 
                 <div className="grid grid-cols-2 gap-3 text-sm">
-                  {/* Student's suggestion (if they typed a legal move) */}
                   {revealed.student_move ? (
                     <InfoBox
                       label="Your suggestion"
@@ -437,6 +515,14 @@ export default function CoachingSession() {
                   </div>
                 )}
 
+                {/* Mental coaching note — only when blundered from winning position */}
+                {revealed.mental_note && (
+                  <div className="flex gap-2.5 bg-amber-950/40 border border-amber-700/40 rounded-lg p-3">
+                    <Brain size={15} className="text-amber-400 mt-0.5 shrink-0" />
+                    <p className="text-amber-200 text-sm leading-relaxed">{revealed.mental_note}</p>
+                  </div>
+                )}
+
                 {revealed.patterns_detected?.length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {revealed.patterns_detected.map((p, i) => (
@@ -447,7 +533,6 @@ export default function CoachingSession() {
                   </div>
                 )}
 
-                {/* Thinking errors */}
                 {revealed.thinking_errors?.length > 0 && (
                   <div className="bg-chess-dark/60 rounded-lg p-3 border border-slate-700">
                     <div className="text-xs text-slate-500 mb-1.5">Thinking pattern</div>
@@ -465,7 +550,7 @@ export default function CoachingSession() {
                   onClick={handleNext}
                   className="w-full bg-chess-gold text-chess-dark font-semibold py-2 rounded-lg hover:opacity-90"
                 >
-                  {revealed.completed ? 'Finish Session' : 'Next Position →'}
+                  Next Position →
                 </button>
               </div>
             )}

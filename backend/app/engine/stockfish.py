@@ -4,6 +4,7 @@ Uses N+1 position analyses for a game of N moves (one analysis per position,
 reusing evals between consecutive moves).
 """
 import asyncio
+import re
 import chess
 import chess.engine
 import chess.pgn
@@ -11,6 +12,21 @@ import io
 from dataclasses import dataclass
 from typing import Optional
 from app.config import settings
+
+
+def _parse_clk(comment: str) -> float | None:
+    """Extract clock remaining (seconds) from a PGN node comment.
+    Handles both HH:MM:SS and MM:SS formats from Lichess/Chess.com PGNs.
+    """
+    m = re.search(r'\[%clk (\d+):(\d+):(\d+)\]', comment)
+    if m:
+        h, mn, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return float(h * 3600 + mn * 60 + s)
+    m = re.search(r'\[%clk (\d+):(\d+)\]', comment)
+    if m:
+        mn, s = int(m.group(1)), int(m.group(2))
+        return float(mn * 60 + s)
+    return None
 
 
 @dataclass
@@ -30,6 +46,7 @@ class MoveEval:
     move_number: int
     color: str                  # "white" or "black"
     pv_san: list = None         # engine principal variation in SAN (up to 5 moves)
+    clock_remaining: float = None  # seconds left on clock after this move (from %clk)
 
 
 def _pov_cp(score: chess.engine.PovScore, color: chess.Color) -> float:
@@ -110,9 +127,14 @@ class StockfishEngine:
         if not game:
             return []
 
-        main_line = list(game.mainline_moves())
+        # Collect nodes (for clock data) and moves together
+        nodes = list(game.mainline())
+        main_line = [n.move for n in nodes]
         if not main_line:
             return []
+
+        # Extract clock remaining (seconds) from each node's comment
+        clocks: list[float | None] = [_parse_clk(n.comment or "") for n in nodes]
 
         # Build all N+1 board states
         boards: list[chess.Board] = []
@@ -174,6 +196,7 @@ class StockfishEngine:
                 move_number=boards[i].fullmove_number,
                 color=color_str,
                 pv_san=pv_san,
+                clock_remaining=clocks[i],
             ))
             board.push(move)
 

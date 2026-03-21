@@ -1,6 +1,7 @@
 """
 Interactive coaching session endpoints.
 """
+import asyncio
 import chess
 import random
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +13,10 @@ from typing import Optional
 from app.database import get_db
 from app.models import Game, GameAnalysis, CoachingSession, PerformanceProfile
 from app.llm.explainer import explain_mistake, generate_position_question, generate_session_summary
+from app.llm.coach_memory import (
+    get_or_create_memory, generate_coach_opening,
+    generate_game_arc, generate_mental_note, update_memory_after_session,
+)
 from app.engine.stockfish import get_engine
 from app.patterns.tactical_detectors import _is_hanging
 
@@ -187,6 +192,45 @@ async def start_coaching_session(
     top_patterns = [pt for pt, _ in sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True)[:3]]
 
     opponent = game.black_player if user_color == "white" else game.white_player
+
+    # Fetch latest profile scores for the coach opening
+    profile_result = await db.execute(
+        select(PerformanceProfile)
+        .where(PerformanceProfile.user_id == req.user_id)
+        .order_by(PerformanceProfile.created_at.desc())
+        .limit(1)
+    )
+    profile = profile_result.scalar_one_or_none()
+    current_scores = {}
+    if profile:
+        current_scores = {
+            "attack":           profile.attack_score,
+            "defense":          profile.defense_score,
+            "opening":          profile.opening_score,
+            "strategy":         profile.strategy_score,
+            "endgame":          profile.endgame_score,
+            "tactics":          profile.tactics_score,
+            "time_management":  profile.time_management_score,
+            "conversion":       profile.conversion_score,
+            "mental_stability": profile.mental_stability_score,
+        }
+
+    # Coach memory: fetch/create, then generate personalized opening + game arc
+    memory = await get_or_create_memory(req.user_id, db)
+    game_info = {
+        "opponent":      opponent or "opponent",
+        "result":        str(game.result.value) if game.result else "unknown",
+        "opening_name":  game.opening_name or "",
+        "user_color":    user_color,
+    }
+
+    # Run coach opening + game arc concurrently
+    coach_opening, game_arc = await asyncio.gather(
+        generate_coach_opening(memory, current_scores, game_info),
+        generate_game_arc(evals, user_color, game_info["result"]),
+    )
+
+    # Also keep the per-game summary (used as subtitle)
     session_summary = await generate_session_summary(
         user_color=user_color,
         opponent=opponent or "opponent",
@@ -234,6 +278,8 @@ async def start_coaching_session(
 
     return {
         "session_id": session.id,
+        "coach_opening": coach_opening,
+        "game_arc": game_arc,
         "session_summary": session_summary,
         "total_critical_moves": len(critical_indices),
         "current_position": {
@@ -367,10 +413,22 @@ async def submit_answer(
         thinking_errors=thinking_errors,
     )
 
-    # Save interaction
+    # Mental coaching note: player blundered from a winning position
+    mental_note = None
+    if move_eval["classification"] == "blunder" and move_eval.get("eval_before", 0) > 200:
+        memory = await get_or_create_memory(session.user_id, db)
+        mental_note = await generate_mental_note(
+            move_san=move_eval["move_san"],
+            eval_before=move_eval["eval_before"],
+            classification=move_eval["classification"],
+            recurring_patterns=memory.recurring_patterns or [],
+        )
+
+    # Save interaction (include eval_before so memory update can detect winning blunders)
     interaction = {
         "move_index": critical_indices[current_idx],
         "move_san": move_eval["move_san"],
+        "eval_before": move_eval.get("eval_before", 0),
         "user_answer": req.user_answer,
         "candidate_moves_selected": req.candidate_moves_selected,
         "thinking_errors": thinking_errors,
@@ -429,6 +487,7 @@ async def submit_answer(
 
     return {
         "explanation": explanation,
+        "mental_note": mental_note,
         # User's original written answer (for display in the reveal panel)
         "user_answer_text": req.user_answer,
         # Candidate moves the user selected (for display in the reveal panel)
@@ -455,6 +514,53 @@ async def submit_answer(
             "total": len(critical_indices),
         }
     }
+
+
+@router.post("/session/{session_id}/close")
+async def close_coaching_session(session_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Called by the frontend when the player leaves the session.
+    Updates coach memory with patterns seen, score deltas, and increments session count.
+    Safe to call multiple times (idempotent on session data).
+    """
+    session_result = await db.execute(select(CoachingSession).where(CoachingSession.id == session_id))
+    session = session_result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Fetch latest profile scores
+    profile_result = await db.execute(
+        select(PerformanceProfile)
+        .where(PerformanceProfile.user_id == session.user_id)
+        .order_by(PerformanceProfile.created_at.desc())
+        .limit(1)
+    )
+    profile = profile_result.scalar_one_or_none()
+    current_scores = {}
+    if profile:
+        current_scores = {
+            "attack":           profile.attack_score,
+            "defense":          profile.defense_score,
+            "opening":          profile.opening_score,
+            "strategy":         profile.strategy_score,
+            "endgame":          profile.endgame_score,
+            "tactics":          profile.tactics_score,
+            "time_management":  profile.time_management_score,
+            "conversion":       profile.conversion_score,
+            "mental_stability": profile.mental_stability_score,
+        }
+
+    memory = await get_or_create_memory(session.user_id, db)
+    # Coach asked about the training plan in the opening — mark it acknowledged
+    memory.training_plan_pending = False
+    await update_memory_after_session(
+        memory=memory,
+        interactions=session.interactions or [],
+        game_id=session.game_id,
+        current_scores=current_scores,
+        db=db,
+    )
+    return {"ok": True, "sessions_completed": memory.sessions_completed}
 
 
 @router.get("/session/{session_id}")

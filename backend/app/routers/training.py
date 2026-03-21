@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models import PerformanceProfile, TrainingPlan
 from app.training.plan_generator import generate_training_plan, plan_to_dict
 from app.llm.explainer import generate_batch_summary
+from app.llm.coach_memory import get_or_create_memory
 
 router = APIRouter(prefix="/training", tags=["training"])
 
@@ -50,6 +51,11 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
     db.add(training_plan)
     await db.commit()
     await db.refresh(training_plan)
+
+    # Tell coach memory a plan was assigned — the coach will ask about it next session
+    memory = await get_or_create_memory(user_id, db)
+    memory.training_plan_pending = True
+    await db.commit()
 
     return {"plan_id": training_plan.id, "plan": plan_dict}
 
@@ -107,6 +113,7 @@ async def get_performance_summary(user_id: int, db: AsyncSession = Depends(get_d
         scores=scores,
         top_patterns=patterns,
         games_analyzed=profile.games_analyzed,
+        raw_metrics=raw,
     )
 
     return {"summary": summary, "scores": scores}

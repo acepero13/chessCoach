@@ -6,6 +6,7 @@ import TrainingPlan from './pages/TrainingPlan'
 import SelfAnalysis from './pages/SelfAnalysis'
 import ReviewedGames from './pages/ReviewedGames'
 import GameReview from './pages/GameReview'
+import MentalTutor from './pages/MentalTutor'
 
 export default function App() {
   const [userId, setUserIdState] = useState(() => {
@@ -55,6 +56,10 @@ export default function App() {
         <Route
           path="/game/:gameId"
           element={<GameReview userId={userId} />}
+        />
+        <Route
+          path="/mental-tutor"
+          element={<MentalTutor userId={userId} />}
         />
       </Routes>
     </BrowserRouter>

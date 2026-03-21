@@ -82,6 +82,9 @@ export const submitAnswer = (sessionId, candidateMovesSelected, userAnswer = '',
 export const getSession = (sessionId) =>
   api.get(`/coaching/session/${sessionId}`)
 
+export const closeCoachingSession = (sessionId) =>
+  api.post(`/coaching/session/${sessionId}/close`)
+
 export const getCognitiveProfile = (userId) =>
   api.get(`/profile/${userId}/cognitive-profile`)
 
@@ -134,6 +137,27 @@ export const submitCoachReviewReply = (sessionId, payload) =>
 
 export const listUserSessions = (userId) =>
   api.get(`/selfanalysis/user/${userId}/sessions`)
+
+// Mental Tutor
+export const getMentalScenarios = (userId, limit = 10) =>
+  api.get(`/mental-tutor/${userId}/scenarios`, { params: { limit } })
+
+export const startMentalSession = (userId, gameId, moveIndex, maxMoves = 6) =>
+  api.post('/mental-tutor/session/start', {
+    user_id: userId,
+    game_id: gameId,
+    move_index: moveIndex,
+    max_moves: maxMoves,
+  })
+
+export const playMentalMove = (sessionId, moveUci, moveTimeMs = 0) =>
+  api.post(`/mental-tutor/session/${sessionId}/move`, {
+    move_uci: moveUci,
+    move_time_ms: moveTimeMs,
+  })
+
+export const completeMentalSession = (sessionId) =>
+  api.post(`/mental-tutor/session/${sessionId}/complete`)
 
 // Admin
 export const resetDatabase = () =>

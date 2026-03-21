@@ -370,6 +370,21 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
         castled_early = False   # per-game flag: castled by move 15
         castled_at_all = False  # per-game flag: castled at any point
 
+        # Determine time trouble threshold from this game's clock readings.
+        # Use 10% of the initial clock (max observed = earliest), minimum 30s.
+        # This adapts automatically to bullet (1 min) vs rapid (10 min) time controls.
+        _clocks_this_game = [
+            e.get("clock_remaining")
+            for e in user_evals
+            if e.get("clock_remaining") is not None
+        ]
+        _time_trouble_threshold = (
+            max(30.0, max(_clocks_this_game) * 0.10)
+            if _clocks_this_game else 30.0
+        )
+        if _clocks_this_game:
+            m.has_time_data = True
+
         for e in user_evals:
             cp_loss    = e.get("centipawn_loss", 0.0)
             eval_before = e.get("eval_before", 0.0)
@@ -428,6 +443,13 @@ def compute_all_scores(analyses: list[dict]) -> PerformanceScores:
             # Mental stability: large eval collapses
             if cp_loss > 250:
                 m.eval_collapses += 1
+
+            # Time management: count moves and blunders in time trouble
+            clock = e.get("clock_remaining")
+            if clock is not None and clock < _time_trouble_threshold:
+                m.moves_time_trouble += 1
+                if cls == "blunder":
+                    m.blunders_time_trouble += 1
 
         # Castling timing per game
         if castled_early:
