@@ -16,6 +16,123 @@ from app.engine.stockfish import MoveEval
 from app.patterns.tactical_detectors import detect_tactical_patterns
 from app.patterns.strategic_detectors import detect_strategic_patterns
 
+def _compute_archetype(scores: dict) -> str:
+    """Determine player archetype from performance scores. Fully deterministic."""
+    t = scores.get("tactics", 50)
+    ms = scores.get("mental_stability", 50)
+    d = scores.get("defense", 50)
+    a = scores.get("attack", 50)
+    o = scores.get("opening", 50)
+    s = scores.get("strategy", 50)
+    e = scores.get("endgame", 50)
+    c = scores.get("conversion", 50)
+
+    if ms < 40:
+        return "Unstable Under Pressure"
+    if t > 65 and ms < 50:
+        return "Tactical but Impulsive"
+    if d > 65 and a < 45:
+        return "Solid but Passive"
+    if o > 70 and (s + e) / 2 < 50:
+        return "Strong Opening, Weak Conversion"
+    if t > 60 and c < 50:
+        return "Good Calculator, Poor Converter"
+    if a > 65 and d < 45:
+        return "Attacking but Defensively Fragile"
+    if all(v >= 60 for v in scores.values()):
+        return "Well-Rounded"
+    weakest = min(scores, key=lambda k: scores[k])
+    labels = {
+        "tactics": "Tactical Vision",
+        "strategy": "Strategic Understanding",
+        "endgame": "Endgame Technique",
+        "opening": "Opening Knowledge",
+        "mental_stability": "Mental Resilience",
+        "conversion": "Conversion Skills",
+        "attack": "Attacking Play",
+        "defense": "Defensive Play",
+        "time_management": "Time Management",
+    }
+    return f"Developing {labels.get(weakest, weakest.replace('_', ' ').title())}"
+
+
+def _compute_traits(scores: dict, pattern_counts: dict, total_games: int) -> list[str]:
+    """Compute behavioral traits from scores and pattern frequencies."""
+    traits = []
+    n = max(total_games, 1)
+
+    def rate(k):
+        return pattern_counts.get(k, 0) / n
+
+    if rate("hanging_piece_missed") > 0.25 or rate("missed_fork") > 0.2:
+        traits.append("Threat-blind")
+    if scores.get("mental_stability", 50) < 45:
+        traits.append("Tilts under pressure")
+    if scores.get("attack", 50) > 65 and scores.get("conversion", 50) < 50:
+        traits.append("Over-aggressive")
+    if scores.get("defense", 50) > 65 and scores.get("attack", 50) < 45:
+        traits.append("Solid but passive")
+    if scores.get("endgame", 50) < 45:
+        traits.append("Endgame weakness")
+    if scores.get("opening", 50) > 70:
+        traits.append("Opening strength")
+    if scores.get("defense", 50) > 70:
+        traits.append("Reliable defender")
+    if scores.get("tactics", 50) > 70:
+        traits.append("Tactically sharp")
+    if scores.get("strategy", 50) > 70:
+        traits.append("Positionally aware")
+
+    return traits[:5]
+
+
+def _compute_opponent_segments(games_list, analyses_list) -> dict:
+    """
+    Segment game performance by opponent relative strength.
+    Returns {"weaker": {...}, "equal": {...}, "stronger": {...}}.
+    """
+    game_map = {g.id: g for g in games_list}
+    segments: dict[str, list] = {"weaker": [], "equal": [], "stronger": []}
+
+    for a in analyses_list:
+        g = game_map.get(a.game_id)
+        if not g:
+            continue
+        user_elo = g.white_elo if g.user_color == "white" else g.black_elo
+        opp_elo = g.black_elo if g.user_color == "white" else g.white_elo
+        if not user_elo or not opp_elo:
+            continue
+
+        diff = opp_elo - user_elo
+        seg = "weaker" if diff < -200 else "stronger" if diff > 200 else "equal"
+
+        evals = a.move_evaluations or []
+        user_evals = [e for e in evals if e.get("color") == g.user_color]
+        blunders = sum(1 for e in user_evals if e.get("classification") == "blunder")
+        avg_cp = (
+            sum(min(e.get("centipawn_loss", 0), 500) for e in user_evals) / max(len(user_evals), 1)
+        ) if user_evals else 0
+
+        segments[seg].append({
+            "won": g.result.value == "win" if g.result else False,
+            "blunders": blunders,
+            "avg_cp_loss": avg_cp,
+        })
+
+    result = {}
+    for seg_name, seg_games in segments.items():
+        n = len(seg_games)
+        if not n:
+            continue
+        result[seg_name] = {
+            "games": n,
+            "win_rate": round(sum(1 for g in seg_games if g["won"]) / n * 100),
+            "avg_cp_loss": round(sum(g["avg_cp_loss"] for g in seg_games) / n),
+            "avg_blunders": round(sum(g["blunders"] for g in seg_games) / n, 1),
+        }
+    return result
+
+
 router = APIRouter(prefix="/profile", tags=["profile"])
 
 
@@ -577,3 +694,154 @@ async def get_pattern_explain(user_id: int, body: PatternExplainRequest):
         centipawn_loss=body.centipawn_loss,
     )
     return {"explanation": explanation or "LLM unavailable — try again later."}
+
+
+@router.get("/{user_id}/cognitive-profile")
+async def get_cognitive_profile(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Return deterministic player archetype and traits from latest profile."""
+    profile_result = await db.execute(
+        select(PerformanceProfile)
+        .where(PerformanceProfile.user_id == user_id)
+        .order_by(PerformanceProfile.created_at.desc())
+        .limit(1)
+    )
+    profile = profile_result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="No profile found.")
+
+    scores = {
+        "attack": profile.attack_score,
+        "defense": profile.defense_score,
+        "opening": profile.opening_score,
+        "strategy": profile.strategy_score,
+        "endgame": profile.endgame_score,
+        "tactics": profile.tactics_score,
+        "time_management": profile.time_management_score,
+        "conversion": profile.conversion_score,
+        "mental_stability": profile.mental_stability_score,
+    }
+
+    # Collect pattern counts from raw_metrics if stored, else query
+    raw = profile.raw_metrics or {}
+    pattern_counts = raw.get("pattern_counts", {})
+    total_games = profile.games_analyzed or 1
+
+    archetype = _compute_archetype(scores)
+    traits = _compute_traits(scores, pattern_counts, total_games)
+
+    return {
+        "archetype": archetype,
+        "traits": traits,
+        "scores": scores,
+        "games_analyzed": total_games,
+    }
+
+
+@router.get("/{user_id}/opponent-profile")
+async def get_opponent_profile(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Return performance segmented by opponent strength (weaker/equal/stronger)."""
+    games_result = await db.execute(select(Game).where(Game.user_id == user_id))
+    games = games_result.scalars().all()
+    game_ids = [g.id for g in games]
+
+    if not game_ids:
+        return {"segments": {}, "has_elo_data": False}
+
+    analyses_result = await db.execute(
+        select(GameAnalysis).where(
+            GameAnalysis.game_id.in_(game_ids),
+            GameAnalysis.status == AnalysisStatus.complete,
+        )
+    )
+    analyses = analyses_result.scalars().all()
+
+    segments = _compute_opponent_segments(games, analyses)
+    has_elo = any(
+        (g.white_elo and g.black_elo) for g in games
+    )
+    return {"segments": segments, "has_elo_data": has_elo}
+
+
+@router.get("/{user_id}/trends")
+async def get_trends(user_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Compare pattern frequency in last 10 games vs previous 10 games.
+    Returns trend direction (improving/worsening/stable) per pattern.
+    """
+    games_result = await db.execute(
+        select(Game).where(Game.user_id == user_id).order_by(Game.played_at.asc(), Game.id.asc())
+    )
+    games = games_result.scalars().all()
+    game_ids = [g.id for g in games]
+
+    if not game_ids:
+        return {"trends": [], "recent_games": 0, "previous_games": 0}
+
+    analyses_result = await db.execute(
+        select(GameAnalysis).where(
+            GameAnalysis.game_id.in_(game_ids),
+            GameAnalysis.status == AnalysisStatus.complete,
+        )
+    )
+    analyses = analyses_result.scalars().all()
+    analysis_map = {a.game_id: a for a in analyses}
+
+    # Build sorted list of (game, analysis) pairs
+    pairs = [
+        (g, analysis_map[g.id])
+        for g in games
+        if g.id in analysis_map
+    ]
+
+    n = len(pairs)
+    recent_pairs = pairs[-10:]
+    previous_pairs = pairs[max(0, n - 20):-10] if n > 10 else []
+
+    def pattern_rate(game_analysis_pairs):
+        counts: dict[str, int] = {}
+        total = len(game_analysis_pairs)
+        if not total:
+            return {}, total
+        for g, a in game_analysis_pairs:
+            user_color = g.user_color
+            seen: set[str] = set()
+            for p in (a.patterns_detected or []):
+                if p.get("color") == user_color:
+                    ptype = p.get("type", "")
+                    if ptype and ptype not in seen:
+                        seen.add(ptype)
+                        counts[ptype] = counts.get(ptype, 0) + 1
+        return {k: v / total for k, v in counts.items()}, total
+
+    recent_rates, n_recent = pattern_rate(recent_pairs)
+    prev_rates, n_prev = pattern_rate(previous_pairs)
+
+    all_patterns = set(recent_rates) | set(prev_rates)
+    trend_list = []
+    for pt in all_patterns:
+        r = recent_rates.get(pt, 0.0)
+        p = prev_rates.get(pt, 0.0)
+        change = r - p
+        # Skip very rare patterns
+        if r < 0.05 and abs(change) < 0.05:
+            continue
+        if change < -0.08:
+            trend = "improving"
+        elif change > 0.08:
+            trend = "worsening"
+        else:
+            trend = "stable"
+        trend_list.append({
+            "type": pt,
+            "recent_rate": round(r, 2),
+            "previous_rate": round(p, 2),
+            "trend": trend,
+            "change": round(change, 2),
+        })
+
+    trend_list.sort(key=lambda x: -x["recent_rate"])
+    return {
+        "trends": trend_list[:10],
+        "recent_games": n_recent,
+        "previous_games": n_prev,
+    }

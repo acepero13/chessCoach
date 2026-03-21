@@ -12,6 +12,7 @@ import PatternDrillModal from '../components/PatternDrillModal'
 import {
   listGames, getLatestProfile, computeProfile, selectGames,
   getProfileHistory, getPatternStats, getProgress, resetDatabase,
+  getCognitiveProfile, getOpponentProfile,
 } from '../api/client'
 
 // ── Pattern label mapping ────────────────────────────────────────────────────
@@ -67,6 +68,10 @@ export default function Dashboard({ userId, username, setUser }) {
   const [progress, setProgress] = useState(null)
   const [insightsLoading, setInsightsLoading] = useState(false)
 
+  // Cognitive profile
+  const [cognitiveProfile, setCognitiveProfile] = useState(null)
+  const [opponentProfile, setOpponentProfile] = useState(null)
+
   // Pattern drill modal
   const [drillPattern, setDrillPattern] = useState(null) // { type, totalGames }
 
@@ -74,14 +79,16 @@ export default function Dashboard({ userId, username, setUser }) {
     if (!uid) return
     setLoading(true)
     try {
-      const [gRes, pRes, progRes] = await Promise.allSettled([
+      const [gRes, pRes, progRes, cpRes] = await Promise.allSettled([
         listGames(uid),
         getLatestProfile(uid),
         getProgress(uid),
+        getCognitiveProfile(uid),
       ])
       if (gRes.status === 'fulfilled') setGames(gRes.value.data)
       if (pRes.status === 'fulfilled') setProfile(pRes.value.data)
       if (progRes.status === 'fulfilled') setProgress(progRes.value.data)
+      if (cpRes.status === 'fulfilled') setCognitiveProfile(cpRes.value.data)
     } finally {
       setLoading(false)
     }
@@ -311,6 +318,10 @@ export default function Dashboard({ userId, username, setUser }) {
                 </div>
               )}
             </div>
+
+            {cognitiveProfile && (
+              <CognitiveProfileCard data={cognitiveProfile} />
+            )}
 
             {/* Recurring problems — always visible on overview if data exists */}
             {progress?.recurring_patterns?.length > 0 && (
@@ -637,6 +648,39 @@ function NoProfileCard({ analyzedCount, onCompute, computing, onImport }) {
             {computing ? 'Computing…' : 'Compute Profile'}
           </button>
         </>
+      )}
+    </div>
+  )
+}
+
+function CognitiveProfileCard({ data }) {
+  const traitColors = [
+    'bg-purple-900/40 text-purple-300',
+    'bg-blue-900/40 text-blue-300',
+    'bg-amber-900/40 text-amber-300',
+    'bg-red-900/40 text-red-300',
+    'bg-green-900/40 text-green-300',
+  ]
+  return (
+    <div className="bg-chess-panel rounded-xl p-4">
+      <h2 className="text-lg font-semibold text-chess-gold mb-3">Your Playing Style</h2>
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-10 h-10 rounded-full bg-chess-gold/20 flex items-center justify-center text-chess-gold text-xl">
+          ♟
+        </div>
+        <div>
+          <p className="font-semibold text-white text-base">{data.archetype}</p>
+          <p className="text-xs text-slate-500">Based on {data.games_analyzed} games</p>
+        </div>
+      </div>
+      {data.traits.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {data.traits.map((trait, i) => (
+            <span key={i} className={`px-2.5 py-1 rounded-full text-xs font-medium ${traitColors[i % traitColors.length]}`}>
+              {trait}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   )

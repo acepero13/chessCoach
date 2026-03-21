@@ -305,6 +305,7 @@ async def explain_mistake(
     student_cp_loss: float | None = None,
     student_classification: str = "",
     user_answer_text: str = "",
+    thinking_errors: list[dict] = [],
 ) -> str:
     """
     Build a coaching explanation where all chess facts are deterministic (Python-computed)
@@ -345,6 +346,11 @@ async def explain_mistake(
     else:
         parts.append(f"Engine best move — {best_move_san}")
 
+    # --- Section 3b: Thinking errors (deterministic) ---
+    if thinking_errors:
+        for err in thinking_errors:
+            parts.append(f"Thinking pattern — {err['description']}")
+
     # --- Section 4: LLM evaluates the user's written reasoning ---
     # If user wrote reasoning text, the LLM assesses whether their thinking is
     # correct/reveals a misconception, then states the key chess idea.
@@ -352,8 +358,14 @@ async def explain_mistake(
     pv_str = " ".join(engine_pv_san[:5]) if engine_pv_san else best_move_san
     answer_excerpt = (user_answer_text or "").strip()[:300]
 
+    thinking_context = ""
+    if thinking_errors:
+        err_names = "; ".join(e["description"] for e in thinking_errors[:2])
+        thinking_context = f"Thinking issues detected: {err_names}. "
+
     if answer_excerpt:
         concept_prompt = (
+            f"{thinking_context}"
             f"A chess player was asked what they would play. They wrote: \"{answer_excerpt}\". "
             f"They played {move_san} in the game (a {classification}, {centipawn_loss:.0f} cp loss). "
             f"The engine recommends {best_move_san}: {pv_str}. "
@@ -365,6 +377,7 @@ async def explain_mistake(
         label = "Assessment"
     else:
         concept_prompt = (
+            f"{thinking_context}"
             f"A chess player played {move_san} (a {classification}, {centipawn_loss:.0f} cp loss). "
             f"The engine recommends {best_move_san}: {pv_str}. "
             f"In ONE sentence, state what chess idea {best_move_san} embodies "

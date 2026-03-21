@@ -72,11 +72,24 @@ export const getPatternExplain = (userId, patternType, position) =>
 export const startSession = (userId, gameId) =>
   api.post('/coaching/session/start', { user_id: userId, game_id: gameId })
 
-export const submitAnswer = (sessionId, userAnswer) =>
-  api.post(`/coaching/session/${sessionId}/answer`, { user_answer: userAnswer })
+export const submitAnswer = (sessionId, candidateMovesSelected, userAnswer = '', skipped = false) =>
+  api.post(`/coaching/session/${sessionId}/answer`, {
+    candidate_moves_selected: candidateMovesSelected,
+    user_answer: userAnswer,
+    skipped,
+  })
 
 export const getSession = (sessionId) =>
   api.get(`/coaching/session/${sessionId}`)
+
+export const getCognitiveProfile = (userId) =>
+  api.get(`/profile/${userId}/cognitive-profile`)
+
+export const getOpponentProfile = (userId) =>
+  api.get(`/profile/${userId}/opponent-profile`)
+
+export const getTrends = (userId) =>
+  api.get(`/profile/${userId}/trends`)
 
 // Training
 export const generatePlan = (userId) =>

@@ -2,6 +2,7 @@
 Interactive coaching session endpoints.
 """
 import chess
+import random
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -55,6 +56,68 @@ def _validated_patterns(
         result.append(p)
     return result
 
+async def _get_candidate_moves(fen: str, engine, n_engine: int = 3, n_distractors: int = 5) -> list[dict]:
+    """
+    Get candidate moves for thinking capture: engine top N + random legal distractors.
+    Returns list of {san, uci, is_engine_top}, shuffled.
+    """
+    board = chess.Board(fen)
+    legal = list(board.legal_moves)
+
+    # Engine top moves via MultiPV (lighter depth for speed)
+    engine_lines = await engine.get_multipv(fen, num_pv=n_engine, depth=15)
+    engine_uci_set = {l["move_uci"] for l in engine_lines}
+
+    candidates = [
+        {"san": l["move_san"], "uci": l["move_uci"], "is_engine_top": True}
+        for l in engine_lines
+    ]
+
+    # Add distractor moves: random legal moves not in engine top
+    non_engine = [m for m in legal if m.uci() not in engine_uci_set]
+    random.shuffle(non_engine)
+    for m in non_engine[:n_distractors]:
+        try:
+            candidates.append({
+                "san": board.san(m),
+                "uci": m.uci(),
+                "is_engine_top": False,
+            })
+        except Exception:
+            pass
+
+    random.shuffle(candidates)
+    return candidates
+
+
+def _classify_thinking_errors(
+    candidate_moves_selected: list[str],   # SANs selected by the user
+    best_move_san: str,
+    engine_top_sans: list[str],            # SANs of engine's top N moves
+) -> list[dict]:
+    """Classify thinking errors based on user's candidate selections."""
+    if not candidate_moves_selected:
+        return []
+
+    errors = []
+
+    # Missed Candidate: engine best not in user's selections
+    if best_move_san and best_move_san not in candidate_moves_selected:
+        errors.append({
+            "type": "missed_candidate",
+            "description": f"The engine's best move ({best_move_san}) was not in your candidate list.",
+        })
+
+    # Tunnel Vision: only 1 candidate selected
+    if len(candidate_moves_selected) == 1:
+        errors.append({
+            "type": "tunnel_vision",
+            "description": "You considered only one candidate move — try to generate at least 2–3 options before deciding.",
+        })
+
+    return errors
+
+
 router = APIRouter(prefix="/coaching", tags=["coaching"])
 
 
@@ -64,7 +127,9 @@ class StartSessionRequest(BaseModel):
 
 
 class AnswerRequest(BaseModel):
-    user_answer: str
+    user_answer: str = ""
+    candidate_moves_selected: list[str] = []   # SANs of moves the user selected
+    skipped: bool = False
 
 
 @router.post("/session/start")
@@ -163,6 +228,10 @@ async def start_coaching_session(
         classification=move_eval.get("classification", "mistake"),
     )
 
+    # Generate candidate moves for thinking capture
+    engine = await get_engine()
+    candidate_moves = await _get_candidate_moves(move_eval["fen"], engine)
+
     return {
         "session_id": session.id,
         "session_summary": session_summary,
@@ -180,6 +249,7 @@ async def start_coaching_session(
         "hint": question_data["hint"],
         "question_type": question_data["question_type"],
         "hide_evaluation": True,
+        "candidate_moves": candidate_moves,
     }
 
 
@@ -272,6 +342,14 @@ async def submit_answer(
         student_cp_loss = eval_result["centipawn_loss"]
         student_classification = eval_result["classification"]
 
+    # Classify thinking errors
+    engine_top_sans = [move_eval.get("best_move_san", "")]  # engine best
+    thinking_errors = _classify_thinking_errors(
+        req.candidate_moves_selected,
+        move_eval.get("best_move_san", ""),
+        engine_top_sans,
+    )
+
     # Generate explanation — includes LLM assessment of user's written reasoning
     explanation = await explain_mistake(
         move_san=move_eval["move_san"],
@@ -286,6 +364,7 @@ async def submit_answer(
         student_cp_loss=student_cp_loss,
         student_classification=student_classification,
         user_answer_text=req.user_answer,
+        thinking_errors=thinking_errors,
     )
 
     # Save interaction
@@ -293,6 +372,8 @@ async def submit_answer(
         "move_index": critical_indices[current_idx],
         "move_san": move_eval["move_san"],
         "user_answer": req.user_answer,
+        "candidate_moves_selected": req.candidate_moves_selected,
+        "thinking_errors": thinking_errors,
         "student_move_san": student_move_san,
         "student_cp_loss": student_cp_loss,
         "student_classification": student_classification,
@@ -334,6 +415,7 @@ async def submit_answer(
             centipawn_loss=next_eval.get("centipawn_loss", 0.0),
             classification=next_eval.get("classification", "mistake"),
         )
+        next_candidate_moves = await _get_candidate_moves(next_eval["fen"], engine)
         next_position = {
             "fen": next_eval["fen"],
             "move_number": next_eval["move_number"],
@@ -343,12 +425,16 @@ async def submit_answer(
             "black_player": game.black_player,
             "user_color": game.user_color,
         }
-        next_question = next_question_data
+        next_question = {**next_question_data, "candidate_moves": next_candidate_moves}
 
     return {
         "explanation": explanation,
         # User's original written answer (for display in the reveal panel)
         "user_answer_text": req.user_answer,
+        # Candidate moves the user selected (for display in the reveal panel)
+        "candidate_moves_selected": req.candidate_moves_selected,
+        # Thinking errors detected
+        "thinking_errors": thinking_errors,
         # Game move (what was actually played)
         "game_move": move_eval["move_san"],
         "eval_swing": move_eval["centipawn_loss"],

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { Chessboard } from 'react-chessboard'
-import { Send, ChevronLeft, Lightbulb, Eye, Trophy, ChevronDown, ChevronUp } from 'lucide-react'
+import { Send, ChevronLeft, Lightbulb, Eye, Trophy, ChevronDown, ChevronUp, Brain } from 'lucide-react'
 import { startSession, submitAnswer } from '../api/client'
 
 function inlineMarkdown(text) {
@@ -43,6 +43,78 @@ function classificationClass(c) {
   return map[c] || ''
 }
 
+function ThinkingCapturePanel({ candidateMoves, onSubmit, onSkip, submitting }) {
+  const [selected, setSelected] = useState([])
+  const [reasoning, setReasoning] = useState('')
+  const [showReasoning, setShowReasoning] = useState(false)
+
+  const toggleMove = (san) => {
+    setSelected(prev =>
+      prev.includes(san)
+        ? prev.filter(m => m !== san)
+        : prev.length < 3
+          ? [...prev, san]
+          : prev
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-slate-400">Which moves were you considering? (tap to select, up to 3)</p>
+      <div className="grid grid-cols-3 gap-2">
+        {candidateMoves.map(m => (
+          <button
+            key={m.san}
+            onClick={() => toggleMove(m.san)}
+            className={`px-2 py-2 rounded-lg text-sm font-mono font-semibold border transition-all ${
+              selected.includes(m.san)
+                ? 'bg-chess-gold text-chess-dark border-chess-gold'
+                : 'bg-chess-dark text-slate-300 border-slate-600 hover:border-slate-400'
+            }`}
+          >
+            {m.san}
+          </button>
+        ))}
+      </div>
+
+      <button
+        onClick={() => setShowReasoning(v => !v)}
+        className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors w-fit"
+      >
+        <ChevronDown size={12} className={`transition-transform ${showReasoning ? 'rotate-180' : ''}`} />
+        Add reasoning (optional)
+      </button>
+
+      {showReasoning && (
+        <textarea
+          value={reasoning}
+          onChange={e => setReasoning(e.target.value)}
+          placeholder="What were you thinking? Why did you consider these moves?"
+          rows={2}
+          className="w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
+        />
+      )}
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => onSubmit(selected, reasoning)}
+          disabled={submitting || selected.length === 0}
+          className="flex-1 flex items-center justify-center gap-2 bg-chess-gold text-chess-dark font-semibold px-4 py-2 rounded-lg hover:opacity-90 disabled:opacity-50 text-sm"
+        >
+          {submitting ? 'Analyzing…' : 'Submit'}
+        </button>
+        <button
+          onClick={onSkip}
+          disabled={submitting}
+          className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 text-sm transition-colors disabled:opacity-50"
+        >
+          Skip
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function CoachingSession() {
   const { gameId } = useParams()
   const { state } = useLocation()
@@ -55,7 +127,7 @@ export default function CoachingSession() {
   const [question, setQuestion] = useState(null)
   const [hint, setHint] = useState(null)
   const [showHint, setShowHint] = useState(false)
-  const [answer, setAnswer] = useState('')
+  const [candidateMoves, setCandidateMoves] = useState([])
   const [revealed, setRevealed] = useState(null)
   const [progress, setProgress] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -78,6 +150,7 @@ export default function CoachingSession() {
         setPosition(data.current_position)
         setQuestion(data.question)
         setHint(data.hint)
+        setCandidateMoves(data.candidate_moves || [])
         setProgress({ reviewed: 0, total: data.total_critical_moves })
         setSessionSummary(data.session_summary || null)
       } catch (e) {
@@ -89,11 +162,12 @@ export default function CoachingSession() {
     init()
   }, [gameId, userId])
 
-  const handleSubmitAnswer = async () => {
-    if (!answer.trim() || !sessionId) return
+  const handleSubmitAnswer = async (selectedMoves, reasoning, skipped = false) => {
+    if (!sessionId) return
+    if (!skipped && selectedMoves.length === 0) return
     setSubmitting(true)
     try {
-      const res = await submitAnswer(sessionId, answer)
+      const res = await submitAnswer(sessionId, skipped ? [] : selectedMoves, reasoning || '', skipped)
       const data = res.data
       setRevealed(data)
       setProgress(data.progress)
@@ -115,8 +189,8 @@ export default function CoachingSession() {
     setPosition(revealed.next_position)
     setQuestion(revealed.next_question?.question)
     setHint(revealed.next_question?.hint)
+    setCandidateMoves(revealed.next_question?.candidate_moves || [])
     setShowHint(false)
-    setAnswer('')
     setRevealed(null)
     setPhase('question')
   }
@@ -249,20 +323,33 @@ export default function CoachingSession() {
                 </div>
               )}
 
-              {/* Answer input */}
-              {phase === 'question' && (
+              {/* Candidate moves thinking capture */}
+              {phase === 'question' && candidateMoves.length > 0 && (
+                <ThinkingCapturePanel
+                  candidateMoves={candidateMoves}
+                  onSubmit={(moves, text) => handleSubmitAnswer(moves, text)}
+                  onSkip={() => handleSubmitAnswer([], '', true)}
+                  submitting={submitting}
+                />
+              )}
+
+              {/* Fallback textarea if no candidates */}
+              {phase === 'question' && candidateMoves.length === 0 && (
                 <div className="flex flex-col gap-2">
                   <textarea
-                    value={answer}
-                    onChange={e => setAnswer(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && e.ctrlKey && handleSubmitAnswer()}
                     placeholder="What would you play and why? Explain your thinking — the coach will assess your reasoning, not just your move."
                     rows={3}
                     className="w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && e.ctrlKey) handleSubmitAnswer([], e.target.value)
+                    }}
                   />
                   <button
-                    onClick={handleSubmitAnswer}
-                    disabled={submitting || !answer.trim()}
+                    onClick={(e) => {
+                      const ta = e.target.closest('.flex').querySelector('textarea')
+                      handleSubmitAnswer([], ta?.value || '')
+                    }}
+                    disabled={submitting}
                     className="flex items-center justify-center gap-2 bg-chess-gold text-chess-dark font-semibold px-4 py-2 rounded-lg hover:opacity-90 disabled:opacity-50 text-sm"
                   >
                     {submitting ? 'Analyzing…' : <><Send size={14} /> Submit Answer</>}
@@ -280,10 +367,31 @@ export default function CoachingSession() {
                   <span className="font-semibold text-chess-gold">Engine Reveals</span>
                 </div>
 
-                {/* Show what the user wrote */}
+                {/* User's candidate moves selected */}
+                {revealed.candidate_moves_selected?.length > 0 && (
+                  <div className="bg-chess-dark rounded-lg p-3 border-l-2 border-slate-600">
+                    <div className="text-xs text-slate-500 mb-1">Your candidates</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {revealed.candidate_moves_selected.map((m, i) => (
+                        <span
+                          key={i}
+                          className={`px-2 py-0.5 rounded text-xs font-mono font-semibold ${
+                            m === revealed.engine_best_move
+                              ? 'bg-green-900/50 text-green-400'
+                              : 'bg-slate-700 text-slate-300'
+                          }`}
+                        >
+                          {m} {m === revealed.engine_best_move && '✓'}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Show what the user wrote (if they added reasoning) */}
                 {revealed.user_answer_text && (
                   <div className="bg-chess-dark rounded-lg p-3 border-l-2 border-slate-600">
-                    <div className="text-xs text-slate-500 mb-1">Your answer</div>
+                    <div className="text-xs text-slate-500 mb-1">Your reasoning</div>
                     <p className="text-sm text-slate-300 italic">"{revealed.user_answer_text}"</p>
                   </div>
                 )}
@@ -336,6 +444,20 @@ export default function CoachingSession() {
                         {p.type.replace(/_/g, ' ')}
                       </span>
                     ))}
+                  </div>
+                )}
+
+                {/* Thinking errors */}
+                {revealed.thinking_errors?.length > 0 && (
+                  <div className="bg-chess-dark/60 rounded-lg p-3 border border-slate-700">
+                    <div className="text-xs text-slate-500 mb-1.5">Thinking pattern</div>
+                    <div className="space-y-1">
+                      {revealed.thinking_errors.map((e, i) => (
+                        <p key={i} className="text-xs text-amber-400">
+                          {e.type.replace(/_/g, ' ')} — {e.description}
+                        </p>
+                      ))}
+                    </div>
                   </div>
                 )}
 
