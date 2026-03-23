@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
 from app.engine.stockfish import get_engine, shutdown_engine
-from app.routers import games, profile, coaching, training, selfanalysis, admin, mental_tutor
+from app.routers import games, profile, coaching, training, selfanalysis, admin, mental_tutor, drills, review
 
 
 @asynccontextmanager
@@ -50,6 +50,8 @@ app.include_router(coaching.router)
 app.include_router(training.router)
 app.include_router(selfanalysis.router)
 app.include_router(mental_tutor.router)
+app.include_router(drills.router)
+app.include_router(review.router)
 app.include_router(admin.router)
 
 

@@ -187,3 +187,51 @@ class MentalTutorSession(Base):
     completed = Column(Boolean, default=False)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)
+
+
+class DrillResult(Base):
+    """One completed calculation drill (one position evaluated)."""
+    __tablename__ = "drill_results"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=True)
+    # Position context
+    classification = Column(String(20))         # "blunder" | "mistake"
+    centipawn_loss = Column(Float)
+    # Result
+    accuracy = Column(Integer)                  # 0–100
+    correct_moves = Column(Integer)
+    depth_reached = Column(Integer)
+    error_classification = Column(String(40))   # "good_calculation" | "missed_forcing_move" | …
+    missed_forcing_move = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ReviewCard(Base):
+    """Spaced-repetition puzzle card — one critical position the user must solve."""
+    __tablename__ = "review_cards"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # Position
+    fen = Column(Text, nullable=False)
+    correct_move_uci = Column(String(10), nullable=False)   # e.g. "e2e4"
+    correct_move_san = Column(String(20))                   # e.g. "e4"
+    user_color = Column(String(5))                          # "white" | "black"
+
+    # Context (for the reveal screen)
+    source = Column(String(20))          # "coaching" | "selfanalysis" | "drill"
+    error_type = Column(String(40))      # missed_fork, blunder, etc.
+    centipawn_loss = Column(Float)
+    engine_pv_san = Column(JSON)         # first few engine moves for reveal
+
+    # SM-2 scheduling
+    repetition_count = Column(Integer, default=0)   # times answered correctly in a row
+    interval_days = Column(Integer, default=1)       # current interval
+    ease_factor = Column(Float, default=2.5)         # SM-2 ease
+    next_review_at = Column(DateTime, nullable=False)
+    last_reviewed_at = Column(DateTime)
+
+    created_at = Column(DateTime, default=datetime.utcnow)

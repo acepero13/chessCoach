@@ -7,6 +7,8 @@ import SelfAnalysis from './pages/SelfAnalysis'
 import ReviewedGames from './pages/ReviewedGames'
 import GameReview from './pages/GameReview'
 import MentalTutor from './pages/MentalTutor'
+import Drills from './pages/Drills'
+import Review from './pages/Review'
 
 export default function App() {
   const [userId, setUserIdState] = useState(() => {
@@ -60,6 +62,14 @@ export default function App() {
         <Route
           path="/mental-tutor"
           element={<MentalTutor userId={userId} />}
+        />
+        <Route
+          path="/drills"
+          element={<Drills userId={userId} />}
+        />
+        <Route
+          path="/review"
+          element={<Review userId={userId} />}
         />
       </Routes>
     </BrowserRouter>

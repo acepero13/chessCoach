@@ -165,6 +165,36 @@ export const playMentalMove = (sessionId, moveUci, moveTimeMs = 0) =>
 export const completeMentalSession = (sessionId) =>
   api.post(`/mental-tutor/session/${sessionId}/complete`)
 
+// Drills
+export const getDrillPositions = (userId, includeMistakes = false, limit = 10) =>
+  api.get(`/drills/${userId}/positions`, { params: { include_mistakes: includeMistakes, limit } })
+
+export const applyDrillMove = (fen, moveUci) =>
+  api.post('/drills/apply-move', { fen, move_uci: moveUci })
+
+export const evaluateDrillLine = (fen, userLine, userId, gameId, classification, centipawnLoss) =>
+  api.post('/drills/evaluate', {
+    fen, user_line: userLine,
+    user_id: userId, game_id: gameId,
+    classification, centipawn_loss: centipawnLoss,
+  })
+
+export const getDrillStats = (userId) =>
+  api.get(`/drills/${userId}/stats`)
+
+// Spaced Repetition Review
+export const seedReviewCards = (userId) =>
+  api.post(`/review/${userId}/seed`)
+
+export const getDueCards = (userId, limit = 20) =>
+  api.get(`/review/${userId}/due`, { params: { limit } })
+
+export const getReviewStats = (userId) =>
+  api.get(`/review/${userId}/stats`)
+
+export const answerCard = (cardId, correct) =>
+  api.post(`/review/card/${cardId}/answer`, { correct })
+
 // Admin
 export const resetDatabase = () =>
   api.delete('/admin/reset')
