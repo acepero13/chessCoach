@@ -177,7 +177,13 @@ class StockfishEngine:
             # info_after is from the opponent's (not color) perspective, so negate
             eval_after = -_pov_cp(info_after["score"], not color)
 
-            centipawn_loss = max(0.0, eval_best - eval_after)
+            # If the player played the engine's exact best move, cp_loss is 0 by
+            # definition — independent search calls can diverge (horizon effect),
+            # so we never penalise playing the engine's own top choice.
+            if move == best_move_obj:
+                centipawn_loss = 0.0
+            else:
+                centipawn_loss = max(0.0, eval_best - eval_after)
             classification = classify_move(centipawn_loss)
 
             evaluations.append(MoveEval(

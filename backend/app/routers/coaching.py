@@ -19,6 +19,10 @@ from app.llm.coach_memory import (
 )
 from app.engine.stockfish import get_engine
 from app.patterns.tactical_detectors import _is_hanging
+from app.patterns.imbalance_detector import (
+    detect_imbalances, generate_plans, evaluate_plan_consistency,
+    imbalances_to_display, PLAN_LABELS, PLAN_SUBTEXTS,
+)
 
 
 def _pv_uci_to_san(fen: str, pv_uci: list[str]) -> list[str]:
@@ -123,6 +127,38 @@ def _classify_thinking_errors(
     return errors
 
 
+def _build_position_understanding(fen: str, user_color_str: str) -> dict:
+    """Detect imbalances, generate plans, and build the full position understanding dict."""
+    try:
+        board = chess.Board(fen)
+        uc = chess.WHITE if user_color_str == "white" else chess.BLACK
+        imbalances = detect_imbalances(board, uc)
+        plans = generate_plans(imbalances, uc)
+        display = imbalances_to_display(imbalances, uc)
+        plan_info = [
+            {
+                "key": p,
+                "label": PLAN_LABELS.get(p, p.replace("_", " ").title()),
+                "subtext": PLAN_SUBTEXTS.get(p, ""),
+            }
+            for p in plans
+        ]
+        return {
+            "imbalances": imbalances,
+            "imbalances_display": display,
+            "recommended_plans": plans,
+            "plans_display": plan_info,
+        }
+    except Exception as e:
+        print(f"[imbalance] Detection failed: {e}")
+        return {
+            "imbalances": {},
+            "imbalances_display": [],
+            "recommended_plans": [],
+            "plans_display": [],
+        }
+
+
 router = APIRouter(prefix="/coaching", tags=["coaching"])
 
 
@@ -224,21 +260,44 @@ async def start_coaching_session(
         "user_color":    user_color,
     }
 
-    # Run coach opening + game arc concurrently
-    coach_opening, game_arc = await asyncio.gather(
-        generate_coach_opening(memory, current_scores, game_info),
-        generate_game_arc(evals, user_color, game_info["result"]),
+    # Get first critical move (needed before spawning LLM tasks)
+    first_idx = critical_indices[0]
+    move_eval = evals[first_idx]
+    patterns_at_move = _validated_patterns(
+        analysis.patterns_detected or [],
+        move_eval["move_number"],
+        move_eval["fen"],
+        move_eval.get("best_move_uci", ""),
     )
 
-    # Also keep the per-game summary (used as subtitle)
-    session_summary = await generate_session_summary(
-        user_color=user_color,
-        opponent=opponent or "opponent",
-        result=game.result or "unknown",
-        total_mistakes=total_mistakes,
-        total_blunders=total_blunders,
-        top_pattern_types=top_patterns,
-        worst_move=worst_move_summary,
+    # Get engine singleton (fast — already running)
+    engine = await get_engine()
+
+    # Run all LLM calls + engine MultiPV concurrently — previously sequential ~210s, now ~70s
+    (coach_opening, game_arc, session_summary, question_data), candidate_moves = await asyncio.gather(
+        asyncio.gather(
+            generate_coach_opening(memory, current_scores, game_info),
+            generate_game_arc(evals, user_color, game_info["result"]),
+            generate_session_summary(
+                user_color=user_color,
+                opponent=opponent or "opponent",
+                result=game.result or "unknown",
+                total_mistakes=total_mistakes,
+                total_blunders=total_blunders,
+                top_pattern_types=top_patterns,
+                worst_move=worst_move_summary,
+            ),
+            generate_position_question(
+                fen=move_eval["fen"],
+                pattern_type=patterns_at_move[0]["type"] if patterns_at_move else "general",
+                move_number=move_eval["move_number"],
+                color=move_eval["color"],
+                best_move_san=move_eval.get("best_move_san", ""),
+                centipawn_loss=move_eval.get("centipawn_loss", 0.0),
+                classification=move_eval.get("classification", "mistake"),
+            ),
+        ),
+        _get_candidate_moves(move_eval["fen"], engine),
     )
 
     # Create session
@@ -252,29 +311,7 @@ async def start_coaching_session(
     await db.commit()
     await db.refresh(session)
 
-    # Get first critical move
-    first_idx = critical_indices[0]
-    move_eval = evals[first_idx]
-    patterns_at_move = _validated_patterns(
-        analysis.patterns_detected or [],
-        move_eval["move_number"],
-        move_eval["fen"],
-        move_eval.get("best_move_uci", ""),
-    )
-
-    question_data = await generate_position_question(
-        fen=move_eval["fen"],
-        pattern_type=patterns_at_move[0]["type"] if patterns_at_move else "general",
-        move_number=move_eval["move_number"],
-        color=move_eval["color"],
-        best_move_san=move_eval.get("best_move_san", ""),
-        centipawn_loss=move_eval.get("centipawn_loss", 0.0),
-        classification=move_eval.get("classification", "mistake"),
-    )
-
-    # Generate candidate moves for thinking capture
-    engine = await get_engine()
-    candidate_moves = await _get_candidate_moves(move_eval["fen"], engine)
+    position_understanding = _build_position_understanding(move_eval["fen"], user_color)
 
     return {
         "session_id": session.id,
@@ -296,6 +333,7 @@ async def start_coaching_session(
         "question_type": question_data["question_type"],
         "hide_evaluation": True,
         "candidate_moves": candidate_moves,
+        "position_understanding": position_understanding,
     }
 
 
@@ -396,6 +434,9 @@ async def submit_answer(
         engine_top_sans,
     )
 
+    # Position understanding (imbalances + plans) for the current position
+    current_pu = _build_position_understanding(fen, user_color)
+
     # Generate explanation — includes LLM assessment of user's written reasoning
     explanation = await explain_mistake(
         move_san=move_eval["move_san"],
@@ -411,7 +452,24 @@ async def submit_answer(
         student_classification=student_classification,
         user_answer_text=req.user_answer,
         thinking_errors=thinking_errors,
+        imbalances=current_pu.get("imbalances"),
+        recommended_plans=current_pu.get("recommended_plans"),
     )
+
+    # Plan consistency: evaluate the move actually played in the game
+    plan_consistency = None
+    if current_pu["recommended_plans"] and move_eval.get("move_uci"):
+        try:
+            board_for_pc = chess.Board(fen)
+            uc_color = chess.WHITE if user_color == "white" else chess.BLACK
+            plan_consistency = evaluate_plan_consistency(
+                move_eval["move_uci"],
+                board_for_pc,
+                current_pu["recommended_plans"],
+                uc_color,
+            )
+        except Exception as e:
+            print(f"[imbalance] Plan consistency failed: {e}")
 
     # Mental coaching note: player blundered from a winning position
     mental_note = None
@@ -483,7 +541,8 @@ async def submit_answer(
             "black_player": game.black_player,
             "user_color": game.user_color,
         }
-        next_question = {**next_question_data, "candidate_moves": next_candidate_moves}
+        next_pu = _build_position_understanding(next_eval["fen"], user_color)
+        next_question = {**next_question_data, "candidate_moves": next_candidate_moves, "position_understanding": next_pu}
 
     return {
         "explanation": explanation,
@@ -506,6 +565,9 @@ async def submit_answer(
         "engine_best_move": move_eval["best_move_san"],
         "engine_line": pv_san,
         "patterns_detected": patterns_at_move,
+        # Position understanding (imbalances + plans + plan consistency)
+        "position_understanding": current_pu,
+        "plan_consistency": plan_consistency,
         "completed": is_complete,
         "next_position": next_position,
         "next_question": next_question,

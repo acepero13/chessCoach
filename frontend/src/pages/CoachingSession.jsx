@@ -3,7 +3,7 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { Chessboard } from 'react-chessboard'
 import {
   Send, ChevronLeft, Lightbulb, Eye, Trophy,
-  ChevronDown, ChevronUp, Brain, MessageSquare, ArrowRight,
+  ChevronDown, ChevronUp, Brain, MessageSquare, ArrowRight, Target, Swords,
 } from 'lucide-react'
 import { startSession, submitAnswer, closeCoachingSession } from '../api/client'
 
@@ -162,6 +162,105 @@ function CoachOpeningScreen({ coachOpening, gameArc, totalCritical, onStart }) {
   )
 }
 
+// ── Position Understanding Panel ──────────────────────────────────────────────
+
+function ImbalanceIndicator({ label, value, status }) {
+  const statusColors = {
+    good: 'text-green-400',
+    bad: 'text-red-400',
+    neutral: 'text-slate-400',
+  }
+  const statusIcons = {
+    good: '✓',
+    bad: '⚠',
+    neutral: '=',
+  }
+  return (
+    <div className="flex items-center justify-between py-1 border-b border-slate-700/50 last:border-0">
+      <span className="text-xs text-slate-500">{label}</span>
+      <span className={`text-xs font-medium ${statusColors[status] || 'text-slate-400'} flex items-center gap-1`}>
+        <span className="opacity-70">{statusIcons[status]}</span>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function PositionUnderstandingPanel({ positionUnderstanding, planConsistency, collapsed = false }) {
+  const [open, setOpen] = useState(!collapsed)
+  if (!positionUnderstanding) return null
+
+  const { imbalances_display = [], plans_display = [] } = positionUnderstanding
+
+  const consistencyColor = {
+    aligned: 'text-green-400 bg-green-950/40 border-green-700/40',
+    violation: 'text-red-400 bg-red-950/40 border-red-700/40',
+    neutral: 'text-slate-400 bg-slate-800/40 border-slate-600/40',
+  }[planConsistency?.plan_consistency] || 'text-slate-400 bg-slate-800/40 border-slate-600/40'
+
+  return (
+    <div className="bg-chess-panel rounded-xl overflow-hidden border border-slate-700">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/40 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <Target size={14} className="text-chess-gold" />
+          <span className="text-sm font-semibold text-chess-gold">Position Understanding</span>
+        </div>
+        {open ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 flex flex-col gap-3">
+          {/* Imbalances */}
+          {imbalances_display.length > 0 && (
+            <div>
+              <div className="text-xs text-slate-500 mb-1.5 uppercase tracking-wide">Imbalances</div>
+              <div className="bg-chess-dark rounded-lg px-3 py-1">
+                {imbalances_display.map((imb, i) => (
+                  <ImbalanceIndicator key={i} label={imb.label} value={imb.value} status={imb.status} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Recommended plans */}
+          {plans_display.length > 0 && (
+            <div>
+              <div className="text-xs text-slate-500 mb-1.5 uppercase tracking-wide">Strategic Plan</div>
+              <div className="flex flex-col gap-1.5">
+                {plans_display.map((plan, i) => (
+                  <div key={i} className="bg-chess-dark rounded-lg px-3 py-2 flex items-start gap-2">
+                    <Swords size={13} className="text-chess-gold mt-0.5 shrink-0" />
+                    <div>
+                      <div className="text-sm font-medium text-white">{plan.label}</div>
+                      {plan.subtext && <div className="text-xs text-slate-500 mt-0.5">{plan.subtext}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Plan consistency (shown after answer is revealed) */}
+          {planConsistency && (
+            <div>
+              <div className="text-xs text-slate-500 mb-1.5 uppercase tracking-wide">Move vs Plan</div>
+              <div className={`rounded-lg px-3 py-2 border text-sm ${consistencyColor}`}>
+                <span className="font-semibold capitalize">{planConsistency.plan_consistency}</span>
+                {planConsistency.reason && (
+                  <span className="text-xs ml-2 opacity-80">— {planConsistency.reason}</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function CoachingSession() {
@@ -188,6 +287,7 @@ export default function CoachingSession() {
   const [error, setError] = useState(null)
   const [sessionSummary, setSessionSummary] = useState(null)
   const [summaryExpanded, setSummaryExpanded] = useState(false)
+  const [positionUnderstanding, setPositionUnderstanding] = useState(null)
   const closedRef = useRef(false)
 
   useEffect(() => {
@@ -208,6 +308,7 @@ export default function CoachingSession() {
         setQuestion(data.question)
         setHint(data.hint)
         setCandidateMoves(data.candidate_moves || [])
+        setPositionUnderstanding(data.position_understanding || null)
         setProgress({ reviewed: 0, total: data.total_critical_moves })
         // If we have a coach opening, show it first; else go straight to questions
         setPhase(data.coach_opening ? 'opening' : 'question')
@@ -255,6 +356,7 @@ export default function CoachingSession() {
     setQuestion(revealed.next_question?.question)
     setHint(revealed.next_question?.hint)
     setCandidateMoves(revealed.next_question?.candidate_moves || [])
+    setPositionUnderstanding(revealed.next_question?.position_understanding || null)
     setShowHint(false)
     setRevealed(null)
     setPhase('question')
@@ -383,6 +485,13 @@ export default function CoachingSession() {
 
           {/* Right panel */}
           <div className="flex flex-col gap-4">
+
+            {/* Position Understanding — always visible when data is present */}
+            <PositionUnderstandingPanel
+              positionUnderstanding={positionUnderstanding}
+              planConsistency={phase === 'revealed' ? revealed?.plan_consistency : null}
+              collapsed={phase === 'revealed'}
+            />
 
             {/* Question */}
             {phase === 'question' && (

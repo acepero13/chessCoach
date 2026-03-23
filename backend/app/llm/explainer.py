@@ -173,9 +173,14 @@ async def coach_chat_turn(
         f"- Detected patterns: {patterns_str}\n\n"
         "You have two tools:\n"
         "- evaluate_move: use when the student asks about a SPECIFIC move not already in the engine line\n"
-        "- get_alternatives: use when the student asks for other options or best moves\n\n"
-        "Rules: Only reference moves/squares you know from context or from tool results. "
-        "Never invent engine lines. Be concise (2-4 sentences per reply)."
+        "- get_alternatives: use when the student asks for other options, more lines, or confirms 'yes' "
+        "after you offered to show more — call this immediately rather than repeating yourself\n\n"
+        "Rules:\n"
+        "- Only reference moves/squares you know from context or from tool results. Never invent engine lines.\n"
+        "- NEVER repeat content you already said in this conversation — check the message history.\n"
+        "- If the student gives a short affirmative ('yes', 'sure', 'please', 'go ahead') after you offered "
+        "to show more moves, call get_alternatives immediately to fetch fresh engine data.\n"
+        "- Be concise (2-4 sentences per reply). Do not end every reply with the same open question."
     )
 
     messages = [{"role": "system", "content": system}] + conversation
@@ -306,6 +311,8 @@ async def explain_mistake(
     student_classification: str = "",
     user_answer_text: str = "",
     thinking_errors: list[dict] = [],
+    imbalances: dict | None = None,
+    recommended_plans: list[str] | None = None,
 ) -> str:
     """
     Build a coaching explanation where all chess facts are deterministic (Python-computed)
@@ -363,25 +370,36 @@ async def explain_mistake(
         err_names = "; ".join(e["description"] for e in thinking_errors[:2])
         thinking_context = f"Thinking issues detected: {err_names}. "
 
+    # Build imbalance/plan context for the LLM (grounded, no hallucination)
+    position_context = ""
+    if imbalances:
+        imb_parts = []
+        for k, v in imbalances.items():
+            imb_parts.append(f"{k.replace('_', ' ')}: {v.replace('_', ' ')}")
+        position_context += f"Position imbalances: {'; '.join(imb_parts)}. "
+    if recommended_plans:
+        plans_str = " and ".join(p.replace("_", " ") for p in recommended_plans)
+        position_context += f"Correct strategic plan: {plans_str}. "
+
     if answer_excerpt:
         concept_prompt = (
-            f"{thinking_context}"
+            f"{thinking_context}{position_context}"
             f"A chess player was asked what they would play. They wrote: \"{answer_excerpt}\". "
             f"They played {move_san} in the game (a {classification}, {centipawn_loss:.0f} cp loss). "
             f"The engine recommends {best_move_san}: {pv_str}. "
             f"In 2-3 short sentences: "
             f"(1) assess whether their reasoning shows correct understanding or reveals a specific misconception or knowledge gap — be direct; "
-            f"(2) state what chess idea {best_move_san} embodies. "
+            f"(2) state what chess idea {best_move_san} embodies and how it fits the position's strategic plan. "
             f"Do NOT invent moves. Do NOT mention specific squares beyond those already listed."
         )
         label = "Assessment"
     else:
         concept_prompt = (
-            f"{thinking_context}"
+            f"{thinking_context}{position_context}"
             f"A chess player played {move_san} (a {classification}, {centipawn_loss:.0f} cp loss). "
             f"The engine recommends {best_move_san}: {pv_str}. "
             f"In ONE sentence, state what chess idea {best_move_san} embodies "
-            f"(e.g. development, piece activity, king safety, initiative, coordination). "
+            f"and how it relates to the position's strategic requirements. "
             f"Do NOT invent moves. Do NOT mention specific squares beyond those already listed."
         )
         label = "Key idea"
@@ -392,6 +410,47 @@ async def explain_mistake(
         parts.append(f"{label} — {concept}")
 
     return "\n\n".join(parts)
+
+
+_ROOT_CAUSE_HUMAN = {
+    "never_considered":      "candidate blindness — never generating the right move",
+    "rejected_wrong_reason": "wrong rejection — considering good moves but dismissing them incorrectly",
+    "miscalculated":         "calculation errors — having the right idea but computing the result wrong",
+    "plan_disconnect":       "strategic tunnel vision — missing moves due to fixation on a different plan",
+    "time_pressure":         "time management — not having enough time to calculate properly",
+}
+
+
+async def generate_thinking_profile(
+    root_cause_distribution: dict,
+    total_classified: int,
+    dominant_cause: str,
+    game_result: str,
+) -> str | None:
+    """
+    Generate a 2-3 sentence cognitive profile narrative based on the player's
+    self-classified root causes for their mistakes this session.
+    """
+    if not root_cause_distribution or total_classified < 2:
+        return None
+
+    dist_str = "; ".join(
+        f"{_ROOT_CAUSE_HUMAN.get(k, k)}: {v}/{total_classified}"
+        for k, v in sorted(root_cause_distribution.items(), key=lambda x: x[1], reverse=True)
+    )
+    dominant_human = _ROOT_CAUSE_HUMAN.get(dominant_cause, dominant_cause)
+
+    prompt = (
+        f"A chess player self-analyzed a game (result: {game_result}). "
+        f"For {total_classified} mistakes they classified why they missed the engine's best move: {dist_str}. "
+        f"Their dominant error type is {dominant_human}.\n\n"
+        f"In 2-3 sentences:\n"
+        f"(1) Name their primary thinking error directly — what is going wrong in their thought process?\n"
+        f"(2) What does this pattern reveal about how they approach positions?\n"
+        f"(3) One concrete, specific habit to build to address this.\n"
+        f"Be direct. No filler. Ground everything in their actual error distribution."
+    )
+    return await _call_ollama(prompt, num_predict=220, timeout=LLM_TIMEOUT_LONG)
 
 
 async def generate_position_question(
@@ -461,6 +520,22 @@ async def generate_position_question(
     }
 
 
+def _format_pv_labeled(pv_san: list[str], user_color: str) -> str:
+    """
+    Format an engine PV list so the LLM knows whose move is whose.
+    The first move is always the user's best move; they alternate from there.
+    Example: ["Be7", "Rab1", "a4", "Nc5"] with user_color="white"
+    → "Be7 (you) Rab1 (opp) a4 (you) Nc5 (opp)"
+    """
+    if not pv_san:
+        return ""
+    labeled = []
+    for i, move in enumerate(pv_san):
+        player = "you" if i % 2 == 0 else "opp"
+        labeled.append(f"{move} ({player})")
+    return " ".join(labeled)
+
+
 async def explain_annotation(
     move_san: str,
     best_move_san: str,
@@ -472,6 +547,7 @@ async def explain_annotation(
     user_candidates: list[str],
     engine_pv_san: list[str],
     patterns: list[dict],
+    user_color: str = "",       # "white" or "black" — used to label PV moves correctly
 ) -> str:
     """
     Build a self-annotation explanation. All chess facts are deterministic;
@@ -491,9 +567,10 @@ async def explain_annotation(
             else:
                 parts.append(f"Candidates considered ({candidates_str}): the engine's best move ({best_move_san}) was not in your list.")
 
-    # --- Section 3: Engine best line (deterministic) ---
+    # --- Section 3: Engine best line (deterministic, labeled by player) ---
     if engine_pv_san:
-        parts.append(f"Engine best line — {' '.join(engine_pv_san)}")
+        pv_labeled = _format_pv_labeled(engine_pv_san, user_color)
+        parts.append(f"Engine best line — {pv_labeled}")
     else:
         parts.append(f"Engine best move — {best_move_san}")
 
@@ -502,16 +579,31 @@ async def explain_annotation(
         pattern_names = ", ".join(p["type"].replace("_", " ") for p in patterns[:3])
         parts.append(f"Pattern(s) detected — {pattern_names}.")
 
-    # --- Section 5: LLM conceptual contrast (one sentence only) ---
+    # --- Section 5: LLM idea (one sentence only) ---
     annotation_excerpt = (user_annotation or "")[:200]
-    pv_str = " ".join(engine_pv_san[:3]) if engine_pv_san else best_move_san
-    concept_prompt = (
-        f"A chess player played {move_san} ({classification}, {centipawn_loss:.0f} cp loss) "
-        f"and explained: \"{annotation_excerpt}\". "
-        f"The engine recommends {best_move_san} with the line: {pv_str}. "
-        f"In ONE sentence, contrast the chess idea behind the player's move vs the engine's recommendation. "
-        f"Do NOT invent moves or mention specific squares beyond those already listed."
-    )
+    pv_labeled_short = _format_pv_labeled(engine_pv_san[:4], user_color) if engine_pv_san else best_move_san
+    played_engine_best = (move_san == best_move_san) or classification == "good"
+
+    if played_engine_best:
+        # User played the engine's move — confirm and explain why it's correct
+        concept_prompt = (
+            f"A chess player played {move_san}, which is the engine's best move. "
+            f"The engine's expected continuation (each move labeled by who plays it): {pv_labeled_short}. "
+            f"The player explained: \"{annotation_excerpt}\". "
+            f"In ONE sentence, confirm what makes this move strong — the concrete chess reason (tactics, structure, activity, etc.). "
+            f"'opp' moves are the opponent's forced responses, not part of the player's plan. "
+            f"Do NOT invent moves or mention squares beyond those listed."
+        )
+    else:
+        # User played a suboptimal move — contrast their idea with the engine
+        concept_prompt = (
+            f"A chess player played {move_san} ({classification}, {centipawn_loss:.0f} cp loss) "
+            f"and explained: \"{annotation_excerpt}\". "
+            f"The engine recommends {best_move_san} with the continuation (each move labeled by who plays it): {pv_labeled_short}. "
+            f"In ONE sentence, contrast the chess idea behind the player's move vs the engine's recommendation. "
+            f"'opp' moves are the opponent's responses, not part of the engine's plan. "
+            f"Do NOT invent moves or mention specific squares beyond those already listed."
+        )
     concept = await _call_ollama(concept_prompt, num_predict=120, timeout=LLM_TIMEOUT_SHORT)
     if concept:
         parts.append(f"Key idea — {concept}")

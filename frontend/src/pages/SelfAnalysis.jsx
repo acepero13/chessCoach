@@ -4,7 +4,7 @@ import { Chessboard } from 'react-chessboard'
 import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown,
   PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle, Cpu, Info, Download,
-  Bold, Italic, List,
+  Bold, Italic, List, Brain,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
@@ -12,6 +12,7 @@ import {
 import {
   startAnnotationSession, submitAnnotation, saveDraftAnnotation, completeAnnotationSession,
   getLatestSessionForGame, getCoachReview, submitCoachReviewReply, sendCoachChat,
+  submitRootCause, exportAnnotatedPgn,
 } from '../api/client'
 
 // ── Export helpers ────────────────────────────────────────────────────────────
@@ -371,6 +372,134 @@ const MISTAKE_REASONS = [
   { value: 'noise_overload',     label: 'Noise Overload',     desc: 'Position got messy and I panicked' },
 ]
 
+// Post-reveal root cause classification (the important one — submitted AFTER seeing the engine move)
+const ROOT_CAUSE_OPTIONS = [
+  { value: 'never_considered',      label: "Never considered it",            desc: "I didn't generate this move as a candidate at all" },
+  { value: 'rejected_wrong_reason', label: "Saw it — but rejected it wrongly", desc: 'I had the idea but talked myself out of it incorrectly' },
+  { value: 'miscalculated',         label: "Calculated it wrong",            desc: 'I saw it and calculated, but got the answer wrong' },
+  { value: 'plan_disconnect',       label: "Was focused on a different plan", desc: "I was looking elsewhere entirely — never considered this direction" },
+  { value: 'time_pressure',         label: "Time / pressure",                desc: "I didn't have time to look properly" },
+]
+
+const ROOT_CAUSE_COLORS = {
+  never_considered:      '#f87171',
+  rejected_wrong_reason: '#fb923c',
+  miscalculated:         '#facc15',
+  plan_disconnect:       '#a78bfa',
+  time_pressure:         '#94a3b8',
+}
+
+const ROOT_CAUSE_LABELS = {
+  never_considered:      'Never considered',
+  rejected_wrong_reason: 'Rejected wrongly',
+  miscalculated:         'Calculated wrong',
+  plan_disconnect:       'Different plan',
+  time_pressure:         'Time pressure',
+}
+
+// ── RootCausePicker ───────────────────────────────────────────────────────────
+// Shown in the reveal panel after a mistake/blunder. One question: "why didn't you play X?"
+function RootCausePicker({ moveIndex, bestMove, selected, onSelect }) {
+  return (
+    <div className="border-t border-slate-700 pt-3 mt-1">
+      <p className="text-xs text-slate-400 mb-2.5">
+        Engine played{' '}
+        <span className="font-mono text-white font-semibold">{bestMove}</span>
+        {' '}— why didn't you?
+      </p>
+      <div className="flex flex-col gap-1.5">
+        {ROOT_CAUSE_OPTIONS.map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => onSelect(moveIndex, opt.value)}
+            className={`text-left px-3 py-2 rounded-lg border text-sm transition-all ${
+              selected === opt.value
+                ? 'bg-indigo-900/50 border-indigo-500 text-indigo-100'
+                : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-white bg-chess-dark'
+            }`}
+          >
+            <span className="font-medium block leading-tight">{opt.label}</span>
+            <span className="text-xs opacity-60">{opt.desc}</span>
+          </button>
+        ))}
+      </div>
+      {selected && (
+        <p className="text-xs text-indigo-400 mt-2 flex items-center gap-1">
+          <CheckCircle size={11} /> Saved — will appear in your thinking profile
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── ThinkingProfile ───────────────────────────────────────────────────────────
+// Shown in the complete screen. Visualizes root cause distribution + LLM narrative.
+function ThinkingProfile({ profile }) {
+  const { root_cause_distribution = {}, total_classified = 0, total_mistakes = 0, narrative } = profile
+
+  const data = Object.entries(root_cause_distribution)
+    .sort(([, a], [, b]) => b - a)
+    .map(([key, count]) => ({
+      key,
+      label: ROOT_CAUSE_LABELS[key] || key,
+      count,
+      color: ROOT_CAUSE_COLORS[key] || '#94a3b8',
+      pct: total_classified > 0 ? Math.round((count / total_classified) * 100) : 0,
+    }))
+
+  const unclassified = total_mistakes - total_classified
+
+  return (
+    <div className="bg-chess-panel rounded-xl p-4 mb-6 border border-indigo-900/40">
+      <div className="flex items-center gap-2 mb-1">
+        <Brain size={16} className="text-indigo-400" />
+        <h3 className="text-sm font-semibold text-indigo-300">Thinking Profile</h3>
+        <span className="text-xs text-slate-500 ml-auto">
+          {total_classified}/{total_mistakes} mistakes classified
+        </span>
+      </div>
+      <p className="text-xs text-slate-500 mb-4">
+        Why you missed the engine's best move — classified by you after each reveal
+      </p>
+
+      {data.length === 0 ? (
+        <p className="text-sm text-slate-500 italic">
+          Classify your mistakes in the reveal panel to see your thinking profile.
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2.5 mb-4">
+            {data.map(d => (
+              <div key={d.key} className="flex items-center gap-2">
+                <div className="text-xs text-slate-300 w-36 flex-shrink-0 leading-tight">{d.label}</div>
+                <div className="flex-1 h-4 bg-chess-dark rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${d.pct}%`, backgroundColor: d.color + 'cc' }}
+                  />
+                </div>
+                <div className="text-xs text-slate-500 w-8 text-right">{d.count}×</div>
+              </div>
+            ))}
+          </div>
+
+          {unclassified > 0 && (
+            <p className="text-xs text-slate-600 mb-3">
+              {unclassified} mistake{unclassified !== 1 ? 's' : ''} not yet classified
+            </p>
+          )}
+
+          {narrative && (
+            <div className="border-t border-slate-700 pt-3">
+              <Md text={narrative} className="text-sm text-slate-300 leading-relaxed" />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function FoldableSection({ title, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
@@ -489,6 +618,46 @@ function RichTextEditor({ defaultValue, onChange, placeholder }) {
   )
 }
 
+// ── ExportDropdown ─────────────────────────────────────────────────────────────
+function ExportDropdown({ onExportPgn, onExportMd }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-white transition-colors"
+      >
+        <Download size={12} /> Export <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 bg-slate-800 border border-slate-600 rounded-lg shadow-xl overflow-hidden min-w-[160px]">
+          <button
+            onClick={() => { onExportPgn(); setOpen(false) }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+          >
+            <Download size={12} /> PGN (Lichess)
+          </button>
+          <button
+            onClick={() => { onExportMd(); setOpen(false) }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+          >
+            <Download size={12} /> Markdown
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── BoardLegend ───────────────────────────────────────────────────────────────
 // Small info icon that shows a hover tooltip explaining board drawing controls.
 function BoardLegend() {
@@ -543,6 +712,7 @@ function _moveDataToReveal(m) {
     user_eval_label: m.user_eval_label || '',
     signal_flags: m.signal_flags || {},
     mistake_reason: m.mistake_reason || '',
+    root_cause: m.root_cause || '',
   }
 }
 
@@ -641,6 +811,9 @@ export default function SelfAnalysis({ userId }) {
   useEffect(() => { squareHighlightsRef.current = squareHighlights }, [squareHighlights])
   useEffect(() => { userArrowsRef.current = userArrows }, [userArrows])
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
+
+  // Post-reveal root cause classifications: { [move_index]: root_cause_string }
+  const [rootCauses, setRootCauses] = useState({})
 
   // Reflection
   const [reflection, setReflection] = useState(null)
@@ -843,21 +1016,24 @@ export default function SelfAnalysis({ userId }) {
           setSessionId(data.session_id)
           setUserColor(data.user_color)
           setGameResult(data.game_result || null)
-          // Load game data so the user can review their annotations
           loadSessionData(data)
           const preAnnotated = {}
           const restoredHighlights = {}
           const restoredArrows = {}
+          const restoredRootCauses = {}
           for (const m of data.moves_data || []) {
             preAnnotated[m.move_index] = _moveDataToReveal(m)
             if (m.user_squares && Object.keys(m.user_squares).length > 0)
               restoredHighlights[m.move_index] = m.user_squares
             if (m.user_arrows?.length > 0)
               restoredArrows[m.move_index] = m.user_arrows
+            if (m.root_cause)
+              restoredRootCauses[m.move_index] = m.root_cause
           }
           setAnnotatedMoves(preAnnotated)
           setSquareHighlights(restoredHighlights)
           setUserArrows(restoredArrows)
+          setRootCauses(restoredRootCauses)
           setNavIdx(0)
           setPhase('complete')
           return
@@ -872,11 +1048,14 @@ export default function SelfAnalysis({ userId }) {
         const presDrafts = {}
         const restoredHighlights = {}
         const restoredArrows = {}
+        const restoredRootCauses = {}
         for (const m of data.moves_data || []) {
           if (m.user_squares && Object.keys(m.user_squares).length > 0)
             restoredHighlights[m.move_index] = m.user_squares
           if (m.user_arrows?.length > 0)
             restoredArrows[m.move_index] = m.user_arrows
+          if (m.root_cause)
+            restoredRootCauses[m.move_index] = m.root_cause
 
           if (m.draft) {
             // Restore form state only — user hasn't submitted this move yet
@@ -897,6 +1076,7 @@ export default function SelfAnalysis({ userId }) {
         setDraftAnnotations(presDrafts)
         setSquareHighlights(restoredHighlights)
         setUserArrows(restoredArrows)
+        setRootCauses(restoredRootCauses)
 
         // Navigate to first unannotated user move
         // (annotated_move_indices from server only includes submitted, not draft, moves)
@@ -1051,6 +1231,17 @@ export default function SelfAnalysis({ userId }) {
     }
   }
 
+  // Save post-reveal root cause (fire-and-forget to server, instant in state)
+  const handleRootCause = useCallback(async (moveIndex, rootCause) => {
+    setRootCauses(prev => ({ ...prev, [moveIndex]: rootCause }))
+    if (!sessionId) return
+    try {
+      await submitRootCause(sessionId, moveIndex, rootCause)
+    } catch (e) {
+      console.warn('[root-cause]', e)
+    }
+  }, [sessionId])
+
   // Go to questionnaire phase before completing
   const handleRequestComplete = () => {
     setFeelings({
@@ -1102,6 +1293,7 @@ export default function SelfAnalysis({ userId }) {
     setCriticalOnly(false)
     setSquareHighlights({})
     setUserArrows({})
+    setRootCauses({})
     resetFormOnly()
     setPhase('setup')
   }
@@ -1142,6 +1334,23 @@ export default function SelfAnalysis({ userId }) {
       setError(e.response?.data?.detail || e.message)
     } finally {
       setReviewLoading(false)
+    }
+  }
+
+  const handleExportPgn = async () => {
+    try {
+      const res = await exportAnnotatedPgn(sessionId)
+      const white = sessionMeta?.white_player || 'White'
+      const black = sessionMeta?.black_player || 'Black'
+      const filename = `self-analysis-${white}-vs-${black}-session-${sessionId}.pgn`.toLowerCase().replace(/\s+/g, '-')
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('PGN export failed', err)
     }
   }
 
@@ -1211,6 +1420,7 @@ export default function SelfAnalysis({ userId }) {
         onCoachReview={handleCoachReview}
         onReviewAnnotations={() => setPhase('annotating')}
         onExport={handleExport}
+        onExportPgn={handleExportPgn}
         reviewLoading={reviewLoading}
         error={error}
       />
@@ -1300,14 +1510,8 @@ export default function SelfAnalysis({ userId }) {
               <BoardLegend />
             </div>
 
-            {/* Export */}
-            <button
-              onClick={handleExport}
-              title="Export session as Markdown"
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-white transition-colors"
-            >
-              <Download size={12} /> Export
-            </button>
+            {/* Export dropdown */}
+            <ExportDropdown onExportPgn={handleExportPgn} onExportMd={handleExport} />
 
             {/* Finish session */}
             <button
@@ -1534,12 +1738,26 @@ export default function SelfAnalysis({ userId }) {
                 </div>
 
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">
+                  <label className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
                     Confidence:{' '}
                     {confidence === 0 ? 'not set'
                       : confidence === 1 ? '1 – guessing'
                       : confidence === 5 ? '5 – certain'
                       : confidence}
+                    <span className="relative group">
+                      <Info size={12} className="text-slate-500 cursor-help hover:text-slate-300 transition-colors" />
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-xs text-slate-200 shadow-xl z-50 hidden group-hover:block leading-relaxed pointer-events-none">
+                        <p className="font-semibold text-white mb-1">How confident were you in this position?</p>
+                        <p className="mb-1.5">Rate how sure you felt about your move <em>before</em> seeing the engine — not whether it was right or wrong.</p>
+                        <ul className="space-y-0.5 text-slate-300">
+                          <li><span className="text-chess-gold font-medium">1</span> – Pure guess, no real idea</li>
+                          <li><span className="text-chess-gold font-medium">2–3</span> – Had a reason but uncertain</li>
+                          <li><span className="text-chess-gold font-medium">4</span> – Felt pretty sure</li>
+                          <li><span className="text-chess-gold font-medium">5</span> – Completely certain</li>
+                        </ul>
+                        <p className="mt-1.5 text-slate-400">This helps detect overconfidence — blundering on moves you were sure about is the most dangerous pattern.</p>
+                      </div>
+                    </span>
                   </label>
                   <input
                     type="range" min={0} max={5} value={confidence}
@@ -1559,28 +1777,6 @@ export default function SelfAnalysis({ userId }) {
                   />
                   Mark as Critical (deeper analysis — 4 top lines)
                 </label>
-
-                {/* Root Cause — optional self-categorisation of mistake type */}
-                <FoldableSection title="🧠 Root Cause (optional)" defaultOpen={false}>
-                  <p className="text-xs text-slate-500">What drove this move choice?</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {MISTAKE_REASONS.map(r => (
-                      <button
-                        key={r.value}
-                        type="button"
-                        title={r.desc}
-                        onClick={() => setMistakeReason(prev => prev === r.value ? '' : r.value)}
-                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                          mistakeReason === r.value
-                            ? 'bg-orange-900/60 text-orange-200 border-orange-500 font-semibold'
-                            : 'border-slate-600 text-slate-400 hover:border-orange-400 hover:text-orange-300'
-                        }`}
-                      >
-                        {r.label}
-                      </button>
-                    ))}
-                  </div>
-                </FoldableSection>
 
                 <div className="flex gap-2 pt-1">
                   <button
@@ -1735,6 +1931,16 @@ export default function SelfAnalysis({ userId }) {
                   <div className="border-t border-slate-700 pt-3">
                     <Md text={currentReveal.explanation} className="text-sm text-slate-300 leading-relaxed" />
                   </div>
+                )}
+
+                {/* Post-reveal root cause — only for mistakes and blunders */}
+                {['mistake', 'blunder'].includes(currentReveal.classification) && (
+                  <RootCausePicker
+                    moveIndex={currentMove.move_index}
+                    bestMove={currentReveal.engine_best_move}
+                    selected={rootCauses[currentMove.move_index] || currentReveal.root_cause}
+                    onSelect={handleRootCause}
+                  />
                 )}
               </div>
             )}
@@ -2053,7 +2259,7 @@ function SetupPhase({ timeBudget, setTimeBudget, customBudget, setCustomBudget, 
 
 // ── Complete Phase ────────────────────────────────────────────────────────────
 
-function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCoachReview, onReviewAnnotations, onExport, reviewLoading, error }) {
+function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCoachReview, onReviewAnnotations, onExport, onExportPgn, reviewLoading, error }) {
   const [reflectionsOpen, setReflectionsOpen] = useState(false)
 
   if (!reflection) {
@@ -2179,6 +2385,11 @@ function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCo
           </div>
         )}
 
+        {/* Thinking Profile — root cause distribution + LLM narrative */}
+        {reflection.thinking_profile && (
+          <ThinkingProfile profile={reflection.thinking_profile} />
+        )}
+
         {/* Coach Review CTA */}
         <div className="bg-chess-panel rounded-xl p-4 mb-6 border border-slate-700">
           <div className="flex items-start gap-3">
@@ -2219,8 +2430,14 @@ function CompletePhase({ reflection, gameResult, onDashboard, onNewSession, onCo
         </div>
 
         <button
-          onClick={onExport}
+          onClick={onExportPgn}
           className="w-full mt-2 flex items-center justify-center gap-2 border border-slate-600 text-slate-400 hover:text-white hover:border-slate-400 font-medium py-2.5 rounded-xl transition-colors text-sm"
+        >
+          <Download size={15} /> Export as PGN (Lichess)
+        </button>
+        <button
+          onClick={onExport}
+          className="w-full mt-1 flex items-center justify-center gap-2 border border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-600 font-medium py-2.5 rounded-xl transition-colors text-sm"
         >
           <Download size={15} /> Export as Markdown
         </button>

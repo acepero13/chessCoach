@@ -4,9 +4,12 @@ Users review their own game move-by-move, writing annotations and candidate move
 BEFORE the engine reveal. Engine evaluation stays hidden until user commits reasoning.
 """
 import chess
+import chess.pgn
+import io
 import re
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel, Field
@@ -17,7 +20,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.database import get_db
 from app.models import Game, GameAnalysis, AnnotationSession
 import asyncio
-from app.llm.explainer import explain_annotation, generate_review_comment, generate_review_reply, analyze_questionnaire, coach_chat_turn
+from app.llm.explainer import explain_annotation, generate_review_comment, generate_review_reply, analyze_questionnaire, coach_chat_turn, generate_thinking_profile
 from app.engine.stockfish import get_engine
 from app.patterns.tactical_detectors import _is_hanging
 
@@ -364,6 +367,7 @@ async def annotate_move(
         user_candidates=req.user_candidates,
         engine_pv_san=pv_san,
         patterns=patterns,
+        user_color=move_eval.get("color", ""),
     )
 
     # Patch explanation into the stored entry if LLM succeeded
@@ -434,6 +438,50 @@ async def save_draft(
     else:
         moves_data.append(draft_entry)
 
+    session.moves_data = moves_data
+    flag_modified(session, "moves_data")
+    await db.commit()
+    return {"ok": True}
+
+
+VALID_ROOT_CAUSES = {
+    "never_considered", "rejected_wrong_reason",
+    "miscalculated", "plan_disconnect", "time_pressure",
+}
+
+
+class RootCauseRequest(BaseModel):
+    move_index: int
+    root_cause: str
+
+
+@router.post("/session/{session_id}/root-cause")
+async def save_root_cause(
+    session_id: int,
+    req: RootCauseRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Save the player's post-reveal classification of why they missed the best move.
+    Called after the engine reveal for mistakes/blunders. Fire-and-forget from frontend.
+    """
+    if req.root_cause not in VALID_ROOT_CAUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid root_cause: {req.root_cause}")
+
+    session_result = await db.execute(
+        select(AnnotationSession).where(AnnotationSession.id == session_id)
+    )
+    session = session_result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    moves_data = list(session.moves_data or [])
+    idx_map = {m["move_index"]: i for i, m in enumerate(moves_data)}
+
+    if req.move_index not in idx_map:
+        raise HTTPException(status_code=404, detail="Move not found in session")
+
+    moves_data[idx_map[req.move_index]]["root_cause"] = req.root_cause
     session.moves_data = moves_data
     flag_modified(session, "moves_data")
     await db.commit()
@@ -547,15 +595,53 @@ async def complete_session(
     if confidence_calibration_score < 40:
         thinking_notes.append("Calibrate your confidence — you were certain when you shouldn't have been.")
 
+    # ── Thinking profile — aggregate post-reveal root causes ──
+    mistake_moves = [m for m in annotated if m.get("classification") in ("mistake", "blunder")]
+    root_cause_dist: dict[str, int] = {}
+    for m in mistake_moves:
+        rc = m.get("root_cause", "")
+        if rc:
+            root_cause_dist[rc] = root_cause_dist.get(rc, 0) + 1
+    total_classified = sum(root_cause_dist.values())
+    dominant_cause = (
+        max(root_cause_dist, key=root_cause_dist.get)
+        if root_cause_dist else None
+    )
+    thinking_profile: dict = {
+        "root_cause_distribution": root_cause_dist,
+        "total_classified": total_classified,
+        "total_mistakes": len(mistake_moves),
+        "dominant_cause": dominant_cause,
+        "narrative": None,
+    }
+
     reflection = {
         "eval_accuracy_score": eval_accuracy_score,
         "candidate_quality_score": candidate_quality_score,
         "tactical_awareness_score": tactical_awareness_score,
         "confidence_calibration_score": confidence_calibration_score,
         "thinking_notes": thinking_notes,
+        "thinking_profile": thinking_profile,
         "moves_reviewed": len(annotated),
         "total_moves": len(session.focused_move_indices or []),
     }
+
+    # Load game result (needed for both thinking profile and questionnaire coaching)
+    game_q = await db.execute(select(Game).where(Game.id == session.game_id))
+    game_obj = game_q.scalar_one_or_none()
+    game_result_str = game_obj.result.value if game_obj and game_obj.result else "unknown"
+
+    # ── Thinking profile narrative (LLM) ──
+    if total_classified >= 2 and dominant_cause:
+        profile_narrative = await generate_thinking_profile(
+            root_cause_distribution=root_cause_dist,
+            total_classified=total_classified,
+            dominant_cause=dominant_cause,
+            game_result=game_result_str,
+        )
+        if profile_narrative:
+            thinking_profile["narrative"] = profile_narrative
+            reflection["thinking_profile"] = thinking_profile
 
     session.reflection = reflection
     if req.game_feelings:
@@ -581,11 +667,6 @@ async def complete_session(
         for m in moves_data
         for p in (m.get("patterns") or [])
     })
-
-    # Load game result for the prompt
-    game_q = await db.execute(select(Game).where(Game.id == session.game_id))
-    game_obj = game_q.scalar_one_or_none()
-    game_result_str = game_obj.result.value if game_obj and game_obj.result else "unknown"
 
     q = req.game_feelings or {}
     # Only call LLM if there's substantive questionnaire content to analyze
@@ -977,3 +1058,151 @@ async def list_user_sessions(
         })
 
     return {"sessions": items, "total": len(items)}
+
+
+# ──────────────────────────────────────────────
+# PGN Export
+# ──────────────────────────────────────────────
+
+_ROOT_CAUSE_LABELS = {
+    "never_considered":    "Never considered the best move",
+    "rejected_wrong_reason": "Rejected it for the wrong reason",
+    "miscalculated":       "Miscalculated the line",
+    "plan_disconnect":     "Was following a different plan",
+    "time_pressure":       "Ran out of time",
+}
+
+_CLASSIFICATION_NAG = {
+    "inaccuracy": chess.pgn.NAG_DUBIOUS_MOVE,  # $6  ?!
+    "mistake":    chess.pgn.NAG_MISTAKE,        # $2  ?
+    "blunder":    chess.pgn.NAG_BLUNDER,        # $4  ??
+}
+
+
+@router.get("/session/{session_id}/export-pgn")
+async def export_annotated_pgn(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Export the annotation session as an annotated PGN ready for Lichess study import.
+    Returns text/plain with:
+      - User annotations as move comments
+      - NAGs ($2/$4/$6) matching mistake/blunder/inaccuracy
+      - Engine best-move line as an alternative variation
+      - Root-cause label in the comment when classified
+    """
+    session_result = await db.execute(
+        select(AnnotationSession).where(AnnotationSession.id == session_id)
+    )
+    session = session_result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    game_result_q = await db.execute(select(Game).where(Game.id == session.game_id))
+    game = game_result_q.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    # Parse original PGN
+    try:
+        pgn_game = chess.pgn.read_game(io.StringIO(game.pgn))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to parse game PGN")
+
+    if pgn_game is None:
+        raise HTTPException(status_code=500, detail="Empty PGN")
+
+    # Build annotation lookup: move_index → annotation dict
+    moves_data = session.moves_data or []
+    annotated: dict[int, dict] = {
+        m["move_index"]: m
+        for m in moves_data
+        if not m.get("draft", False)
+    }
+
+    # Walk the mainline and inject annotations
+    move_index = 0
+    for node in pgn_game.mainline():
+        ann = annotated.get(move_index)
+        if ann:
+            cls = ann.get("classification", "")
+            nag = _CLASSIFICATION_NAG.get(cls)
+            if nag:
+                node.nags.add(nag)
+
+            # Build comment text
+            parts: list[str] = []
+
+            user_text = _strip_html(ann.get("user_annotation", "") or "").strip()
+            if user_text:
+                parts.append(user_text)
+
+            # Position assessment
+            eval_label = ann.get("user_eval_label", "")
+            eval_verdict = ann.get("eval_verdict", "")
+            if eval_label:
+                verdict_str = f" ({eval_verdict})" if eval_verdict and eval_verdict != "correct" else ""
+                parts.append(f"I assessed: {eval_label}{verdict_str}")
+
+            # Candidate moves the user considered
+            candidates = ann.get("user_candidates") or []
+            if candidates:
+                parts.append(f"Candidates considered: {', '.join(candidates)}")
+
+            # Engine evaluation
+            cp = ann.get("centipawn_loss", 0.0)
+            eval_before = ann.get("engine_eval_before", 0.0)
+            if cls in ("mistake", "blunder", "inaccuracy"):
+                best = ann.get("engine_best_move", "")
+                parts.append(
+                    f"Engine: {best} was better (−{int(cp)} cp)"
+                    if best else f"Engine: −{int(cp)} cp loss"
+                )
+
+            # Root cause
+            rc = ann.get("root_cause", "")
+            if rc:
+                parts.append(f"Error type: {_ROOT_CAUSE_LABELS.get(rc, rc)}")
+
+            node.comment = " | ".join(parts)
+
+            # Add engine best-move as an alternative variation (only for mistakes/blunders)
+            if cls in ("mistake", "blunder") and ann.get("engine_best_move_uci"):
+                try:
+                    parent_board = node.parent.board()
+                    best_uci = ann["engine_best_move_uci"]
+                    best_move = chess.Move.from_uci(best_uci)
+                    if best_move in parent_board.legal_moves:
+                        var_node = node.parent.add_variation(best_move)
+                        var_node.comment = "Engine best"
+                        # Add PV continuation (up to 3 moves)
+                        pv = ann.get("engine_pv_san") or []
+                        var_board = parent_board.copy()
+                        var_board.push(best_move)
+                        var_cur = var_node
+                        for san in pv[1:4]:  # first move already added
+                            try:
+                                m = var_board.parse_san(san)
+                                var_cur = var_cur.add_variation(m)
+                                var_board.push(m)
+                            except Exception:
+                                break
+                except Exception:
+                    pass  # never break export for variation errors
+
+        move_index += 1
+
+    # Stamp the exporter in headers
+    pgn_game.headers["Annotator"] = "ChessTutor Self-Analysis"
+
+    # Serialize
+    exporter = chess.pgn.StringExporter(headers=True, variations=True, comments=True)
+    pgn_text = pgn_game.accept(exporter)
+
+    filename = f"self_analysis_session_{session_id}.pgn"
+    return Response(
+        content=pgn_text,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

@@ -138,6 +138,12 @@ export const submitCoachReviewReply = (sessionId, payload) =>
 export const listUserSessions = (userId) =>
   api.get(`/selfanalysis/user/${userId}/sessions`)
 
+export const submitRootCause = (sessionId, moveIndex, rootCause) =>
+  api.post(`/selfanalysis/session/${sessionId}/root-cause`, { move_index: moveIndex, root_cause: rootCause })
+
+export const exportAnnotatedPgn = (sessionId) =>
+  api.get(`/selfanalysis/session/${sessionId}/export-pgn`, { responseType: 'blob' })
+
 // Mental Tutor
 export const getMentalScenarios = (userId, limit = 10) =>
   api.get(`/mental-tutor/${userId}/scenarios`, { params: { limit } })
