@@ -138,6 +138,12 @@ export const submitCoachReviewReply = (sessionId, payload) =>
 export const listUserSessions = (userId) =>
   api.get(`/selfanalysis/user/${userId}/sessions`)
 
+export const getSelfAnalysisStats = (userId) =>
+  api.get(`/selfanalysis/user/${userId}/stats`)
+
+export const getSelfAnalysisStatsCoaching = (userId) =>
+  api.post(`/selfanalysis/user/${userId}/stats/coaching`)
+
 export const submitRootCause = (sessionId, moveIndex, rootCause) =>
   api.post(`/selfanalysis/session/${sessionId}/root-cause`, { move_index: moveIndex, root_cause: rootCause })
 

@@ -559,10 +559,24 @@ async def explain_annotation(
     parts.append(f"Your position assessment ({user_eval_label}): {eval_verdict}.")
 
     # --- Section 2: Candidate move quality (deterministic) ---
+    user_played_best = (
+        move_san and best_move_san and (
+            move_san == best_move_san or
+            move_san.rstrip("+#") == best_move_san.rstrip("+#")
+        )
+    )
     if user_candidates:
         candidates_str = ", ".join(c for c in user_candidates if c)
+        norm_candidates = [c.rstrip("+#") for c in user_candidates if c]
+        best_in_list = (
+            best_move_san in user_candidates or
+            (best_move_san or "").rstrip("+#") in norm_candidates
+        )
         if candidates_str:
-            if best_move_san in user_candidates:
+            if user_played_best:
+                # User already played the best move — no need to mention it was "missing"
+                parts.append(f"Candidates considered ({candidates_str}): you played the engine's best move.")
+            elif best_in_list:
                 parts.append(f"Candidates considered ({candidates_str}): the engine's best move was among them.")
             else:
                 parts.append(f"Candidates considered ({candidates_str}): the engine's best move ({best_move_san}) was not in your list.")
@@ -1040,3 +1054,133 @@ Base everything strictly on the data above. Do not invent behaviors not supporte
             "(AI narrative unavailable — Ollama not reachable)"
         )
     return result
+
+
+_STAT_SCORE_LABELS = {
+    "eval_accuracy":            "Position evaluation accuracy",
+    "candidate_quality":        "Candidate move quality",
+    "tactical_awareness":       "Tactical pattern awareness",
+    "confidence_calibration":   "Confidence calibration",
+}
+
+_STAT_RC_LABELS = {
+    "never_considered":      "Never even considered the best move",
+    "rejected_wrong_reason": "Saw the move but rejected it for the wrong reason",
+    "miscalculated":         "Miscalculated the resulting position",
+    "plan_disconnect":       "Was following a different plan and missed it",
+    "time_pressure":         "Ran out of time",
+}
+
+
+async def analyze_self_analysis_stats(stats: dict) -> str:
+    """
+    Generate a coaching narrative from aggregated self-analysis statistics.
+    All data is deterministic; LLM adds only interpretation and prioritisation.
+    Returns a Markdown string. Degrades gracefully to a bullet fallback if LLM is unavailable.
+    """
+    total_sessions = stats.get("total_sessions", 0)
+    total_moves    = stats.get("total_moves_reviewed", 0)
+    avg_scores     = stats.get("avg_scores", {})
+    patterns       = stats.get("pattern_frequency", [])
+    cls_breakdown  = stats.get("classification_breakdown", {})
+    root_causes    = stats.get("root_cause_distribution", [])
+    eval_verdicts  = stats.get("eval_verdict_distribution", {})
+    cand_stats     = stats.get("candidate_stats", {})
+    avg_cp         = stats.get("avg_centipawn_loss")
+    mistake_rate   = stats.get("mistake_rate")
+
+    # ── Build a structured data block for the prompt ─────────────────────────
+
+    lines = []
+    lines.append(f"Self-analysis data: {total_sessions} completed session(s), {total_moves} moves reviewed.\n")
+
+    # Scores
+    if avg_scores:
+        lines.append("AVERAGE SCORES (0-100, higher = better):")
+        for key, val in avg_scores.items():
+            label = _STAT_SCORE_LABELS.get(key, key)
+            tag = " ← WEAK" if val < 55 else (" ← STRONG" if val >= 75 else "")
+            lines.append(f"  {label}: {val}{tag}")
+        lines.append("")
+
+    # Move quality
+    if avg_cp is not None or mistake_rate is not None:
+        lines.append("MOVE QUALITY:")
+        if avg_cp is not None:
+            lines.append(f"  Average centipawn loss per move: {avg_cp} cp (capped at 500 for mates)")
+        if mistake_rate is not None:
+            lines.append(f"  Error rate: {mistake_rate}% of reviewed moves were inaccuracies, mistakes, or blunders")
+        total_non_good = cls_breakdown.get("inaccuracy", 0) + cls_breakdown.get("mistake", 0) + cls_breakdown.get("blunder", 0)
+        if total_non_good:
+            lines.append(f"  Breakdown — inaccuracies: {cls_breakdown.get('inaccuracy', 0)}, "
+                         f"mistakes: {cls_breakdown.get('mistake', 0)}, blunders: {cls_breakdown.get('blunder', 0)}")
+        lines.append("")
+
+    # Top patterns
+    top_bad = [p for p in patterns if p["type"] not in ("bishop_knight_trade_ok", "fork", "pin", "checkmate_threat")][:5]
+    if top_bad:
+        lines.append("TOP RECURRING PATTERNS (most frequent first):")
+        for p in top_bad:
+            lines.append(f"  {p['label']}: {p['count']} occurrence(s)")
+        lines.append("")
+
+    # Root causes
+    if root_causes:
+        lines.append("MISTAKE ROOT CAUSES (why mistakes happened):")
+        for rc in root_causes:
+            label = _STAT_RC_LABELS.get(rc["type"], rc["label"])
+            lines.append(f"  {label}: {rc['count']} time(s)")
+        lines.append("")
+
+    # Eval accuracy
+    ev_correct    = eval_verdicts.get("correct", 0)
+    ev_slight     = eval_verdicts.get("slightly off", 0)
+    ev_significant = eval_verdicts.get("significantly off", 0)
+    ev_total      = ev_correct + ev_slight + ev_significant
+    if ev_total > 0:
+        correct_pct = round(ev_correct / ev_total * 100)
+        lines.append(f"POSITION EVALUATION: {correct_pct}% of position assessments were correct "
+                     f"({ev_correct} correct, {ev_slight} slightly off, {ev_significant} significantly off).")
+        lines.append("")
+
+    # Candidate quality
+    best_pct = cand_stats.get("best_move_found_pct")
+    avg_cands = cand_stats.get("avg_candidates_per_move")
+    if best_pct is not None:
+        lines.append(f"CANDIDATE MOVES: best move found or played in {best_pct}% of annotated positions. "
+                     f"Average {avg_cands} candidates considered per move.")
+        lines.append("")
+
+    data_block = "\n".join(lines)
+
+    prompt = (
+        f"{data_block}\n"
+        "Based strictly on the data above, write a concise coaching report in 3 sections using markdown:\n\n"
+        "## What the data shows\n"
+        "In 2-3 sentences, describe the player's current state. Be specific — reference the actual numbers and patterns.\n\n"
+        "## Priority improvements\n"
+        "List 2-3 numbered items, each tied to a specific data point. What should the player work on first, and why?\n\n"
+        "## One thing to do this week\n"
+        "One concrete, actionable practice task. Make it specific enough to start immediately.\n\n"
+        "Rules: Only reference what the data supports. No generic chess advice. No invented patterns."
+    )
+
+    result = await _call_ollama(prompt, num_predict=600, timeout=LLM_TIMEOUT_LONG)
+    if result:
+        return result
+
+    # Fallback: deterministic bullet summary
+    fallback_lines = [f"**{total_sessions} session(s) analysed, {total_moves} moves reviewed.**\n"]
+    if avg_scores:
+        worst = sorted(avg_scores.items(), key=lambda x: x[1])
+        best  = sorted(avg_scores.items(), key=lambda x: -x[1])
+        fallback_lines.append(
+            f"**Weakest area:** {_STAT_SCORE_LABELS.get(worst[0][0], worst[0][0])} ({worst[0][1]})\n"
+            f"**Strongest area:** {_STAT_SCORE_LABELS.get(best[0][0], best[0][0])} ({best[0][1]})\n"
+        )
+    if top_bad:
+        fallback_lines.append("**Top patterns:** " + ", ".join(p["label"] for p in top_bad[:3]))
+    if root_causes:
+        fallback_lines.append("**Most common mistake cause:** " + root_causes[0]["label"])
+    fallback_lines.append("\n*(AI narrative unavailable — Ollama not reachable)*")
+    return "\n".join(fallback_lines)

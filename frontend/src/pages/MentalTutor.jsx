@@ -86,11 +86,10 @@ export default function MentalTutor({ userId }) {
   const handlePieceDrop = useCallback((sourceSquare, targetSquare, piece) => {
     if (submitting || phase !== 'playing') return false
     let moveUci = sourceSquare + targetSquare
-    // Auto-promote to queen
-    if (piece && piece.toLowerCase().includes('p')) {
-      const destRank = parseInt(targetSquare[1])
-      if (destRank === 8 || destRank === 1) moveUci += 'q'
-    }
+    // Auto-promote to queen: detect by source rank (pawn on rank 7 going to 8, or rank 2 going to 1)
+    const srcRank = parseInt(sourceSquare[1])
+    const destRank = parseInt(targetSquare[1])
+    if ((srcRank === 7 && destRank === 8) || (srcRank === 2 && destRank === 1)) moveUci += 'q'
     const moveTimeMs = moveStartRef.current ? Date.now() - moveStartRef.current : 0
     handlePlayMove(moveUci, moveTimeMs)
     return true
@@ -346,10 +345,19 @@ function IntroPanel({ scenario, onStart, submitting }) {
 
 function PlayingPanel({ session, boardFen, moveCount, lastMoveInfo, submitting, onPieceDrop, onFinishEarly }) {
   const progress = Math.round((moveCount / session.max_moves) * 100)
+  const colorLabel = session.user_color === 'black' ? 'Black' : 'White'
+  const colorDot = session.user_color === 'black' ? 'bg-slate-900 border border-slate-400' : 'bg-white border border-slate-400'
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div>
+        {/* Color indicator above board */}
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span className={`inline-block w-3 h-3 rounded-full ${colorDot}`} />
+          <span className="text-sm text-slate-300">
+            You are playing as <span className="font-semibold text-white">{colorLabel}</span>
+          </span>
+        </div>
         <div className="rounded-xl overflow-hidden">
           <Chessboard
             key={boardFen}
@@ -359,7 +367,9 @@ function PlayingPanel({ session, boardFen, moveCount, lastMoveInfo, submitting, 
               allowDragging: !submitting,
               animationDurationInMs: 150,
               boardStyle: { borderRadius: '8px' },
-              onPieceDrop,
+              onPieceDrop: ({ sourceSquare, targetSquare, piece }) => {
+                return onPieceDrop(sourceSquare, targetSquare, piece)
+              },
             }}
           />
         </div>

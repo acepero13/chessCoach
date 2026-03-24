@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, Target, Calendar, RefreshCw, ChevronRight, PenLine, History, Trash2, AlertTriangle, Brain, Dumbbell, RotateCcw } from 'lucide-react'
+import { BookOpen, Target, Calendar, RefreshCw, ChevronRight, PenLine, History, Trash2, AlertTriangle, Brain, Dumbbell, RotateCcw, BarChart2 } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   BarChart, Bar, Cell, ResponsiveContainer,
@@ -269,6 +269,7 @@ export default function Dashboard({ userId, username, setUser }) {
             <ActionCard icon={<Brain size={20} />} title="Mental Tutor" description="Practice converting winning positions under pressure" onClick={() => navigate('/mental-tutor')} />
             <ActionCard icon={<Dumbbell size={20} />} title="Calculation Drills" description="Predict opponent responses from your own blunders" onClick={() => navigate('/drills')} />
             <ActionCard icon={<RotateCcw size={20} />} title="Spaced Review" description="Revisit your mistakes at the right time to build memory" onClick={() => navigate('/review')} />
+            <ActionCard icon={<BarChart2 size={20} />} title="Analysis Stats" description="Patterns, scores, and improvement areas across all your sessions" onClick={() => navigate('/self-analysis-stats')} />
           </div>
         )}
 

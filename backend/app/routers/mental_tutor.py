@@ -217,7 +217,11 @@ async def start_session(req: StartSessionRequest, db: AsyncSession = Depends(get
     move_eval = evals[req.move_index]
     starting_fen = move_eval["fen"]
     starting_eval = float(move_eval["eval_before"])
-    user_color = game.user_color or "white"
+
+    # Derive the active color directly from the FEN — this is authoritative.
+    # game.user_color can be stale/wrong for older imported games.
+    start_board = chess.Board(starting_fen)
+    user_color = "white" if start_board.turn == chess.WHITE else "black"
 
     session = MentalTutorSession(
         user_id=req.user_id,
@@ -323,25 +327,33 @@ async def play_move(session_id: int, req: MoveRequest, db: AsyncSession = Depend
 
     if not is_complete and not board.is_game_over():
         engine_uci = info_opp.get("best_move_uci")
+        # Fallback: pick first legal move if engine returned nothing
+        if not engine_uci:
+            first_legal = next(iter(board.legal_moves), None)
+            engine_uci = first_legal.uci() if first_legal else None
         if engine_uci:
             try:
                 eng_move = chess.Move.from_uci(engine_uci)
-                engine_move_san = board.san(eng_move)
-                board.push(eng_move)
-                new_fen = board.fen()
+                if eng_move in board.legal_moves:
+                    engine_move_san = board.san(eng_move)
+                    board.push(eng_move)
+                    new_fen = board.fen()
 
-                if not board.is_game_over():
-                    info_user = await engine.get_best_move(board.fen(), depth=ENGINE_DEPTH)
-                    new_eval = info_user["score_cp"]
+                    if not board.is_game_over():
+                        info_user = await engine.get_best_move(board.fen(), depth=ENGINE_DEPTH)
+                        new_eval = info_user["score_cp"]
 
-                moves_data.append({
-                    "move_uci": engine_uci,
-                    "move_san": engine_move_san,
-                    "is_user_move": False,
-                    "eval_after": round(new_eval),
-                })
+                    moves_data.append({
+                        "move_uci": engine_uci,
+                        "move_san": engine_move_san,
+                        "is_user_move": False,
+                        "eval_after": round(new_eval),
+                    })
+                else:
+                    # Engine move illegal — board state corrupted; end session
+                    is_complete = True
             except Exception:
-                pass
+                is_complete = True  # don't leave board in unplayable state
 
     state["eval_before"] = new_eval
 

@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import CoachingSession from './pages/CoachingSession'
 import TrainingPlan from './pages/TrainingPlan'
 import SelfAnalysis from './pages/SelfAnalysis'
+import SelfAnalysisStats from './pages/SelfAnalysisStats'
 import ReviewedGames from './pages/ReviewedGames'
 import GameReview from './pages/GameReview'
 import MentalTutor from './pages/MentalTutor'
@@ -70,6 +71,10 @@ export default function App() {
         <Route
           path="/review"
           element={<Review userId={userId} />}
+        />
+        <Route
+          path="/self-analysis-stats"
+          element={<SelfAnalysisStats userId={userId} />}
         />
       </Routes>
     </BrowserRouter>

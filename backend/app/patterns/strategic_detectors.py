@@ -184,10 +184,12 @@ def detect_strategic_patterns(move_evals: list[MoveEval]) -> list[dict]:
                     # Bishop better in open, knight better in closed:
                     # • trading bishop for knight in closed = bishop gives up advantage → bad
                     # • trading knight for bishop in open = knight gives up advantage → bad
-                    bad_trade = (
+                    # Only flag as bad if the engine also confirms it was a poor move (cp_loss > 30)
+                    heuristic_bad = (
                         (moving_piece.piece_type == chess.BISHOP and not is_open) or
                         (moving_piece.piece_type == chess.KNIGHT and is_open)
                     )
+                    bad_trade = heuristic_bad and ev.centipawn_loss > 30
                     ptype = "bishop_knight_trade_bad" if bad_trade else "bishop_knight_trade_ok"
                     desc = (
                         f"{'B×N in closed position (knight may be superior)' if moving_piece.piece_type == chess.BISHOP else 'N×B in open position (bishop may be superior)'}"
