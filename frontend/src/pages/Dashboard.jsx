@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, Target, Calendar, RefreshCw, ChevronRight, PenLine, History, Trash2, AlertTriangle, Brain, Dumbbell, RotateCcw, BarChart2 } from 'lucide-react'
+import { BookOpen, RefreshCw, ChevronRight, PenLine, Trash2, AlertTriangle, Brain, BarChart2 } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   BarChart, Bar, Cell, ResponsiveContainer,
@@ -262,14 +262,20 @@ export default function Dashboard({ userId, username, setUser }) {
         {/* Action cards */}
         {profile && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <ActionCard icon={<BookOpen size={20} />} title="Start Coaching Session" description="Review your most instructive games interactively" onClick={handleStartCoaching} />
-            <ActionCard icon={<PenLine size={20} />} title="Self-Analysis" description="Annotate your own moves before the engine reveals" onClick={handleStartSelfAnalysis} />
-            <ActionCard icon={<Calendar size={20} />} title="Create Training Plan" description="Get a 4-week plan based on your weaknesses" onClick={() => navigate('/training')} />
-            <ActionCard icon={<History size={20} />} title="Reviewed Games" description="See all your self-analysis sessions and scores" onClick={() => navigate('/reviewed-games')} />
-            <ActionCard icon={<Brain size={20} />} title="Mental Tutor" description="Practice converting winning positions under pressure" onClick={() => navigate('/mental-tutor')} />
-            <ActionCard icon={<Dumbbell size={20} />} title="Calculation Drills" description="Predict opponent responses from your own blunders" onClick={() => navigate('/drills')} />
-            <ActionCard icon={<RotateCcw size={20} />} title="Spaced Review" description="Revisit your mistakes at the right time to build memory" onClick={() => navigate('/review')} />
-            <ActionCard icon={<BarChart2 size={20} />} title="Analysis Stats" description="Patterns, scores, and improvement areas across all your sessions" onClick={() => navigate('/self-analysis-stats')} />
+            <MultiCard icon={<BookOpen size={18} />} title="Coaching" items={[
+              { label: 'Start coaching session', onClick: handleStartCoaching },
+              { label: 'Create training plan', onClick: () => navigate('/training') },
+            ]} />
+            <MultiCard icon={<PenLine size={18} />} title="Self-Analysis" items={[
+              { label: 'Annotate a game', onClick: handleStartSelfAnalysis },
+              { label: 'Reviewed games', onClick: () => navigate('/reviewed-games') },
+            ]} />
+            <MultiCard icon={<Brain size={18} />} title="Training" items={[
+              { label: 'Mental Tutor', onClick: () => navigate('/mental-tutor') },
+              { label: 'Calculation Drills', onClick: () => navigate('/drills') },
+              { label: 'Spaced Review', onClick: () => navigate('/review') },
+            ]} />
+            <StatsCard navigate={navigate} />
           </div>
         )}
 
@@ -503,6 +509,52 @@ function InsightsTab({ profileHistory, patternStats, progress, loading, onRefres
 }
 
 // ── Helper components ─────────────────────────────────────────────────────────
+
+function MultiCard({ icon, title, items }) {
+  return (
+    <div className="bg-chess-panel rounded-xl p-4 flex flex-col gap-2">
+      <div className="flex items-center gap-2 mb-1">
+        <div className="text-chess-gold flex-shrink-0">{icon}</div>
+        <span className="font-semibold text-white text-sm">{title}</span>
+      </div>
+      {items.map(({ label, onClick }) => (
+        <button
+          key={label}
+          onClick={onClick}
+          className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-2 py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
+        >
+          <span>{label}</span>
+          <ChevronRight size={12} className="text-slate-600 group-hover:text-chess-gold transition-colors" />
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function StatsCard({ navigate }) {
+  return (
+    <div className="bg-chess-panel rounded-xl p-4 flex flex-col gap-2">
+      <div className="flex items-center gap-2 mb-1">
+        <BarChart2 size={18} className="text-chess-gold flex-shrink-0" />
+        <span className="font-semibold text-white text-sm">Statistics</span>
+      </div>
+      <button
+        onClick={() => navigate('/self-analysis-stats')}
+        className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-2 py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
+      >
+        <span>Self-Analysis</span>
+        <ChevronRight size={12} className="text-slate-600 group-hover:text-chess-gold transition-colors" />
+      </button>
+      <button
+        onClick={() => navigate('/mental-tutor-stats')}
+        className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-2 py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
+      >
+        <span>Mental Tutor</span>
+        <ChevronRight size={12} className="text-slate-600 group-hover:text-chess-gold transition-colors" />
+      </button>
+    </div>
+  )
+}
 
 function ActionCard({ icon, title, description, onClick }) {
   return (

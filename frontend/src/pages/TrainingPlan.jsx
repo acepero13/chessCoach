@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import {
   ChevronLeft, Dumbbell, Clock, Target, BookOpen, Swords, Brain, Trophy, Zap,
 } from 'lucide-react'
-import { generatePlan, getLatestPlan, getPerformanceSummary } from '../api/client'
+import { generatePlan, getLatestPlan } from '../api/client'
+import { streamPost } from '../api/sse'
+import Md from '../components/Md'
 
 const DAY_NAMES = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -183,12 +185,16 @@ export default function TrainingPlan({ userId }) {
   }
 
   const handleSummary = async () => {
+    setSummary('')
     setLoadingSummary(true)
     try {
-      const res = await getPerformanceSummary(userId)
-      setSummary(res.data.summary)
+      await streamPost(
+        `/training/${userId}/summary-stream`,
+        null,
+        chunk => setSummary(prev => prev + chunk),
+      )
     } catch (e) {
-      alert(e.response?.data?.detail || e.message)
+      alert(e.message)
     } finally {
       setLoadingSummary(false)
     }
@@ -229,10 +235,17 @@ export default function TrainingPlan({ userId }) {
         </div>
 
         {/* AI Summary */}
-        {summary && (
+        {(summary || loadingSummary) && (
           <div className="bg-chess-panel rounded-xl p-5 mb-6">
             <h2 className="text-chess-gold font-semibold mb-3">Coach Analysis</h2>
-            <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-line">{summary}</p>
+            {summary ? (
+              <div>
+                <Md text={summary} className="text-slate-300 text-sm leading-relaxed" />
+                {loadingSummary && <span className="animate-pulse text-chess-gold">▌</span>}
+              </div>
+            ) : (
+              <p className="text-slate-500 text-sm animate-pulse">Coach is analysing…</p>
+            )}
           </div>
         )}
 

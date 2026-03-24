@@ -8,47 +8,9 @@ import {
   ArrowLeft, BarChart2, TrendingUp, AlertTriangle,
   Target, Brain, BookOpen, ChevronDown, ChevronUp, MessageSquare,
 } from 'lucide-react'
-import { getSelfAnalysisStats, getSelfAnalysisStatsCoaching } from '../api/client'
-
-// ── Markdown renderer (headings + bold + italic + lists) ────────────────────
-function inlineMd(text) {
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g)
-  return parts.map((p, i) => {
-    if (p.startsWith('**') && p.endsWith('**')) return <strong key={i}>{p.slice(2, -2)}</strong>
-    if (p.startsWith('*') && p.endsWith('*')) return <em key={i}>{p.slice(1, -1)}</em>
-    return p
-  })
-}
-
-function Md({ text, className = '' }) {
-  if (!text) return null
-  const lines = text.split('\n')
-  const elements = []
-  let listItems = []
-  let listType = null
-
-  const flush = () => {
-    if (!listItems.length) return
-    const Tag = listType === 'ol' ? 'ol' : 'ul'
-    const cls = listType === 'ol' ? 'list-decimal list-inside space-y-1' : 'list-disc list-inside space-y-1'
-    elements.push(<Tag key={elements.length} className={cls}>{listItems.map((it, i) => <li key={i}>{inlineMd(it)}</li>)}</Tag>)
-    listItems = []; listType = null
-  }
-
-  lines.forEach((line, idx) => {
-    const h2 = line.match(/^##\s+(.+)/)
-    const h3 = line.match(/^###\s+(.+)/)
-    const ul = line.match(/^[-*]\s+(.+)/)
-    const ol = line.match(/^\d+\.\s+(.+)/)
-    if (h2) { flush(); elements.push(<h2 key={elements.length} className="text-sm font-bold text-chess-gold mt-4 mb-1">{h2[1]}</h2>) }
-    else if (h3) { flush(); elements.push(<h3 key={elements.length} className="text-xs font-semibold text-slate-300 mt-3 mb-0.5 uppercase tracking-wide">{h3[1]}</h3>) }
-    else if (ul) { if (listType === 'ol') flush(); listType = 'ul'; listItems.push(ul[1]) }
-    else if (ol) { if (listType === 'ul') flush(); listType = 'ol'; listItems.push(ol[1]) }
-    else { flush(); if (line.trim() === '') { if (idx > 0) elements.push(<br key={elements.length} />) } else elements.push(<span key={elements.length} className="block">{inlineMd(line)}</span>) }
-  })
-  flush()
-  return <div className={className}>{elements}</div>
-}
+import { getSelfAnalysisStats } from '../api/client'
+import { streamPost } from '../api/sse'
+import Md from '../components/Md'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -280,7 +242,12 @@ export default function SelfAnalysisStats({ userId }) {
             {/* ── LLM coaching narrative ── */}
             <Section title="Coach's Assessment" icon={<MessageSquare size={15} />}>
               {coaching ? (
-                <Md text={coaching} className="text-sm text-slate-300 leading-relaxed" />
+                <div>
+                  <Md text={coaching} className="text-sm text-slate-300 leading-relaxed" />
+                  {coachingLoading && (
+                    <span className="inline-block w-1.5 h-4 bg-chess-gold animate-pulse ml-0.5 align-middle" />
+                  )}
+                </div>
               ) : (
                 <div className="flex flex-col items-start gap-3">
                   <p className="text-sm text-slate-400">
@@ -289,8 +256,12 @@ export default function SelfAnalysisStats({ userId }) {
                   <button
                     onClick={() => {
                       setCoachingLoading(true)
-                      getSelfAnalysisStatsCoaching(userId)
-                        .then(res => setCoaching(res.data.coaching))
+                      setCoaching('')
+                      streamPost(
+                        `/selfanalysis/user/${userId}/stats/coaching`,
+                        null,
+                        chunk => setCoaching(prev => prev + chunk),
+                      )
                         .catch(() => setCoaching('_(Coach unavailable — Ollama not reachable)_'))
                         .finally(() => setCoachingLoading(false))
                     }}
@@ -298,7 +269,7 @@ export default function SelfAnalysisStats({ userId }) {
                     className="flex items-center gap-2 px-4 py-2 bg-chess-gold text-chess-dark text-sm font-semibold rounded-lg hover:bg-yellow-400 transition-colors disabled:opacity-50 disabled:cursor-wait"
                   >
                     <MessageSquare size={14} />
-                    {coachingLoading ? 'Analysing…' : 'Get Coach Assessment'}
+                    {coachingLoading ? 'Generating…' : 'Get Coach Assessment'}
                   </button>
                 </div>
               )}

@@ -6,39 +6,7 @@ import {
   ChevronDown, ChevronUp, Brain, MessageSquare, ArrowRight, Target, Swords,
 } from 'lucide-react'
 import { startSession, submitAnswer, closeCoachingSession } from '../api/client'
-
-// ── Markdown renderer ─────────────────────────────────────────────────────────
-
-function inlineMarkdown(text) {
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g)
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>
-    if (part.startsWith('*') && part.endsWith('*'))   return <em key={i}>{part.slice(1, -1)}</em>
-    return part
-  })
-}
-
-function Md({ text, className = '' }) {
-  if (!text) return null
-  const lines = text.split('\n')
-  const elements = []
-  let listItems = [], listType = null
-  const flushList = () => {
-    if (!listItems.length) return
-    const Tag = listType === 'ol' ? 'ol' : 'ul'
-    const cls = listType === 'ol' ? 'list-decimal list-inside space-y-0.5' : 'list-disc list-inside space-y-0.5'
-    elements.push(<Tag key={elements.length} className={cls}>{listItems.map((it, i) => <li key={i}>{inlineMarkdown(it)}</li>)}</Tag>)
-    listItems = []; listType = null
-  }
-  lines.forEach((line, idx) => {
-    const ul = line.match(/^[-*]\s+(.+)/), ol = line.match(/^\d+\.\s+(.+)/)
-    if (ul) { if (listType === 'ol') flushList(); listType = 'ul'; listItems.push(ul[1]) }
-    else if (ol) { if (listType === 'ul') flushList(); listType = 'ol'; listItems.push(ol[1]) }
-    else { flushList(); if (line.trim() === '') { if (idx > 0) elements.push(<br key={elements.length} />) } else elements.push(<span key={elements.length} className="block">{inlineMarkdown(line)}</span>) }
-  })
-  flushList()
-  return <div className={className}>{elements}</div>
-}
+import Md from '../components/Md'
 
 function classificationClass(c) {
   const map = {
@@ -135,7 +103,7 @@ function CoachOpeningScreen({ coachOpening, gameArc, totalCritical, onStart }) {
             </div>
             <span className="text-chess-gold font-semibold text-sm">Your Coach</span>
           </div>
-          <p className="text-white leading-relaxed text-[15px]">{coachOpening}</p>
+          <Md text={coachOpening} className="text-white leading-relaxed text-[15px]" />
         </div>
 
         {/* Game arc */}
@@ -145,7 +113,7 @@ function CoachOpeningScreen({ coachOpening, gameArc, totalCritical, onStart }) {
               <MessageSquare size={13} className="text-slate-400" />
               <span className="text-xs text-slate-400 font-medium uppercase tracking-wide">How this game went</span>
             </div>
-            <p className="text-slate-300 text-sm leading-relaxed">{gameArc}</p>
+            <Md text={gameArc} className="text-slate-300 text-sm leading-relaxed" />
           </div>
         )}
 
@@ -440,8 +408,8 @@ export default function CoachingSession() {
               }
             </button>
             {summaryExpanded && (
-              <div className="px-4 pb-4 text-sm text-slate-300 leading-relaxed">
-                {sessionSummary}
+              <div className="px-4 pb-4">
+                <Md text={sessionSummary} className="text-sm text-slate-300 leading-relaxed" />
               </div>
             )}
           </div>
@@ -628,7 +596,7 @@ export default function CoachingSession() {
                 {revealed.mental_note && (
                   <div className="flex gap-2.5 bg-amber-950/40 border border-amber-700/40 rounded-lg p-3">
                     <Brain size={15} className="text-amber-400 mt-0.5 shrink-0" />
-                    <p className="text-amber-200 text-sm leading-relaxed">{revealed.mental_note}</p>
+                    <Md text={revealed.mental_note} className="text-amber-200 text-sm leading-relaxed" />
                   </div>
                 )}
 

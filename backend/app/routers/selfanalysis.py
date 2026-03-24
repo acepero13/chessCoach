@@ -8,8 +8,9 @@ import chess.pgn
 import io
 import re
 from datetime import datetime
+import json
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel, Field
@@ -20,7 +21,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.database import get_db
 from app.models import Game, GameAnalysis, AnnotationSession
 import asyncio
-from app.llm.explainer import explain_annotation, generate_review_comment, generate_review_reply, analyze_questionnaire, coach_chat_turn, generate_thinking_profile, analyze_self_analysis_stats
+from app.llm.explainer import explain_annotation, generate_review_comment, generate_review_reply, analyze_questionnaire, coach_chat_turn, generate_thinking_profile, analyze_self_analysis_stats, stream_explain_annotation, stream_stats_coaching
 from app.engine.stockfish import get_engine
 from app.patterns.tactical_detectors import _is_hanging
 
@@ -354,29 +355,7 @@ async def annotate_move(
     flag_modified(session, "moves_data")
     await db.commit()
 
-    # LLM explanation — runs after engine data is already committed.
-    # If it times out or fails, the reveal still works; explanation is just empty.
-    explanation = await explain_annotation(
-        move_san=move_eval.get("move_san", ""),
-        best_move_san=best_move_san,
-        centipawn_loss=centipawn_loss,
-        classification=classification,
-        user_annotation=_strip_html(req.user_annotation),
-        user_eval_label=req.user_eval_label,
-        eval_verdict=verdict,
-        user_candidates=req.user_candidates,
-        engine_pv_san=pv_san,
-        patterns=patterns,
-        user_color=move_eval.get("color", ""),
-    )
-
-    # Patch explanation into the stored entry if LLM succeeded
-    if explanation:
-        move_entry["explanation"] = explanation
-        session.moves_data = moves_data  # already mutated in place above
-        flag_modified(session, "moves_data")
-        await db.commit()
-
+    # Return immediately — explanation is fetched separately via /explain-stream.
     return {
         "engine_eval_before": engine_eval_before,
         "engine_eval_after": engine_eval_after,
@@ -387,11 +366,90 @@ async def annotate_move(
         "engine_pv_san": pv_san,
         "engine_multipv": engine_multipv,
         "patterns": patterns,
-        "explanation": explanation,
+        "explanation": "",
         "eval_verdict": verdict,
         "user_squares": req.user_squares,
         "user_arrows": req.user_arrows,
     }
+
+
+@router.post("/session/{session_id}/explain-stream")
+async def explain_stream(
+    session_id: int,
+    req: AnnotateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Stream the LLM explanation for a submitted annotation move.
+    The caller already has engine reveal data from /annotate.
+    Streams SSE chunks: data: {"text": "…"}\\n\\n  then  data: [DONE]\\n\\n
+    Also patches the final explanation into moves_data when streaming completes.
+    """
+    session_result = await db.execute(
+        select(AnnotationSession).where(AnnotationSession.id == session_id)
+    )
+    session = session_result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    analysis_result = await db.execute(
+        select(GameAnalysis).where(GameAnalysis.game_id == session.game_id)
+    )
+    analysis = analysis_result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    evals = analysis.move_evaluations or []
+    if req.move_index >= len(evals):
+        raise HTTPException(status_code=400, detail="move_index out of range")
+
+    move_eval = evals[req.move_index]
+    best_move_san = move_eval.get("best_move_san", "") or move_eval.get("best_move_uci", "")
+    centipawn_loss = float(move_eval.get("centipawn_loss", 0.0))
+    classification = move_eval.get("classification", "good")
+    pv_san = move_eval.get("pv_san", [])
+
+    # Reconstruct patterns from stored moves_data (already computed by /annotate)
+    moves_data = list(session.moves_data or [])
+    stored_entry = next((m for m in moves_data if m.get("move_index") == req.move_index), {})
+    patterns = stored_entry.get("patterns", [])
+
+    async def _sse_generator():
+        accumulated = []
+        async for chunk in stream_explain_annotation(
+            move_san=move_eval.get("move_san", ""),
+            best_move_san=best_move_san,
+            centipawn_loss=centipawn_loss,
+            classification=classification,
+            user_annotation=_strip_html(req.user_annotation),
+            user_eval_label=req.user_eval_label or "unknown",
+            eval_verdict=stored_entry.get("eval_verdict", ""),
+            user_candidates=req.user_candidates or [],
+            engine_pv_san=pv_san,
+            patterns=patterns,
+            user_color=move_eval.get("color", ""),
+        ):
+            accumulated.append(chunk)
+            yield f"data: {json.dumps({'text': chunk})}\n\n"
+
+        # Patch final explanation into DB
+        full_explanation = "".join(accumulated)
+        if full_explanation and stored_entry:
+            stored_entry["explanation"] = full_explanation
+            session.moves_data = moves_data
+            flag_modified(session, "moves_data")
+            await db.commit()
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx buffering
+        },
+    )
 
 
 @router.post("/session/{session_id}/save-draft")
@@ -1299,13 +1357,22 @@ async def get_stats_coaching(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    On-demand LLM coaching narrative for a user's aggregate self-analysis stats.
+    On-demand LLM coaching narrative streamed as SSE.
     Kept separate from GET /stats so the stats page loads instantly.
+    Streams: data: {"text": "…"}\\n\\n  …  data: [DONE]\\n\\n
     """
-    # Re-use the stats endpoint logic by calling the same DB queries inline
-    stats_response = await get_user_stats(user_id, db)
-    narrative = await analyze_self_analysis_stats(stats_response)
-    return {"coaching": narrative}
+    stats_payload = await get_user_stats(user_id, db)
+
+    async def _sse():
+        async for chunk in stream_stats_coaching(stats_payload):
+            yield f"data: {json.dumps({'text': chunk})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _sse(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ──────────────────────────────────────────────

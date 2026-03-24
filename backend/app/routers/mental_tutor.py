@@ -1,9 +1,11 @@
 """
 Mental Tutor — Winning position conversion training with mental behavior analysis.
 """
+import json
 import chess
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -11,7 +13,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models import Game, GameAnalysis, AnalysisStatus, MentalTutorSession
 from app.engine.stockfish import get_engine, classify_move
-from app.llm.explainer import generate_mental_coaching
+from app.llm.explainer import generate_mental_coaching, stream_mental_stats_coaching
 
 router = APIRouter(prefix="/mental-tutor", tags=["mental-tutor"])
 
@@ -448,3 +450,93 @@ async def get_session_state(session_id: int, db: AsyncSession = Depends(get_db))
         "max_moves": session.max_moves,
         "eval_progression": session.eval_progression,
     }
+
+
+def _build_mental_stats(sessions: list) -> dict:
+    """Aggregate stats from a list of completed MentalTutorSession objects."""
+    total = len(sessions)
+    if total == 0:
+        return {"total_sessions": 0}
+
+    # Results breakdown
+    results_count = {"converted": 0, "failed": 0, "partial": 0}
+    for s in sessions:
+        r = s.result if s.result in results_count else "partial"
+        results_count[r] += 1
+
+    # Mental error counts
+    error_counts = {"rushing": 0, "overcomplication": 0, "relaxation": 0, "tilt": 0}
+    for s in sessions:
+        seen_types = set()
+        for e in (s.mental_errors or []):
+            t = e.get("type", "")
+            if t in error_counts and t not in seen_types:
+                error_counts[t] += 1
+                seen_types.add(t)
+
+    clean_sessions = sum(1 for s in sessions if not (s.mental_errors or []))
+
+    # Eval changes
+    eval_changes = []
+    for s in sessions:
+        prog = s.eval_progression or []
+        if prog and s.starting_eval is not None:
+            eval_changes.append(round(prog[-1] - s.starting_eval))
+    avg_eval_change = round(sum(eval_changes) / len(eval_changes)) if eval_changes else 0
+
+    most_common_error = max(error_counts, key=error_counts.get) if any(error_counts.values()) else None
+
+    # Trend: last 20 sessions
+    recent = sessions[-20:]
+    trend = []
+    for s in recent:
+        prog = s.eval_progression or []
+        trend.append({
+            "date": s.completed_at.isoformat() if s.completed_at else None,
+            "result": s.result,
+            "error_types": list({e.get("type") for e in (s.mental_errors or [])}),
+            "starting_eval": round(s.starting_eval) if s.starting_eval is not None else None,
+            "eval_change": round(prog[-1] - s.starting_eval) if prog and s.starting_eval is not None else None,
+        })
+
+    return {
+        "total_sessions": total,
+        "results_breakdown": results_count,
+        "conversion_rate": round(results_count["converted"] / total * 100),
+        "clean_sessions": clean_sessions,
+        "mental_error_counts": error_counts,
+        "most_common_error": most_common_error,
+        "avg_eval_change": avg_eval_change,
+        "trend": trend,
+    }
+
+
+@router.get("/{user_id}/stats")
+async def get_mental_stats(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Aggregate mental tutor statistics across all completed sessions."""
+    result = await db.execute(
+        select(MentalTutorSession)
+        .where(MentalTutorSession.user_id == user_id, MentalTutorSession.completed == True)
+        .order_by(MentalTutorSession.completed_at.asc())
+    )
+    sessions = result.scalars().all()
+    return _build_mental_stats(list(sessions))
+
+
+@router.post("/{user_id}/stats/coaching-stream")
+async def get_mental_stats_coaching_stream(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Stream an LLM coaching narrative from mental tutor statistics."""
+    result = await db.execute(
+        select(MentalTutorSession)
+        .where(MentalTutorSession.user_id == user_id, MentalTutorSession.completed == True)
+        .order_by(MentalTutorSession.completed_at.asc())
+    )
+    sessions = result.scalars().all()
+    stats = _build_mental_stats(list(sessions))
+
+    async def event_stream():
+        async for chunk in stream_mental_stats_coaching(stats):
+            yield f"data: {json.dumps({'text': chunk})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

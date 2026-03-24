@@ -1,14 +1,16 @@
 """
 Training plan endpoints.
 """
+import json
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
 from app.models import PerformanceProfile, TrainingPlan
 from app.training.plan_generator import generate_training_plan, plan_to_dict
-from app.llm.explainer import generate_batch_summary
+from app.llm.explainer import generate_batch_summary, stream_batch_summary
 from app.llm.coach_memory import get_or_create_memory
 
 router = APIRouter(prefix="/training", tags=["training"])
@@ -117,3 +119,50 @@ async def get_performance_summary(user_id: int, db: AsyncSession = Depends(get_d
     )
 
     return {"summary": summary, "scores": scores}
+
+
+@router.post("/{user_id}/summary-stream")
+async def get_performance_summary_stream(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Stream an LLM-powered narrative summary from the performance profile."""
+    result = await db.execute(
+        select(PerformanceProfile)
+        .where(PerformanceProfile.user_id == user_id)
+        .order_by(PerformanceProfile.created_at.desc())
+        .limit(1)
+    )
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="No profile found.")
+
+    scores = {
+        "attack": profile.attack_score,
+        "defense": profile.defense_score,
+        "opening": profile.opening_score,
+        "strategy": profile.strategy_score,
+        "endgame": profile.endgame_score,
+        "tactics": profile.tactics_score,
+        "time_management": profile.time_management_score,
+        "conversion": profile.conversion_score,
+        "mental_stability": profile.mental_stability_score,
+    }
+
+    raw = profile.raw_metrics or {}
+    patterns = []
+    if raw.get("missed_forks", 0) > 0:
+        patterns.extend([{"type": "missed_fork"}] * raw["missed_forks"])
+    if raw.get("missed_pins", 0) > 0:
+        patterns.extend([{"type": "missed_pin"}] * raw["missed_pins"])
+    if raw.get("strategic_drifts", 0) > 0:
+        patterns.extend([{"type": "strategic_drift"}] * raw["strategic_drifts"])
+
+    async def event_stream():
+        async for chunk in stream_batch_summary(
+            scores=scores,
+            top_patterns=patterns,
+            games_analyzed=profile.games_analyzed,
+            raw_metrics=raw,
+        ):
+            yield f"data: {json.dumps({'text': chunk})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

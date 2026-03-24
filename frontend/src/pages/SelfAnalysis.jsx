@@ -6,6 +6,7 @@ import {
   PenLine, Eye, Trophy, Clock, Filter, Flag, MessageSquare, Send, CheckCircle, XCircle, AlertCircle, Cpu, Info, Download,
   Bold, Italic, List, Brain,
 } from 'lucide-react'
+import Md from '../components/Md'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
@@ -14,6 +15,7 @@ import {
   getLatestSessionForGame, getCoachReview, submitCoachReviewReply, sendCoachChat,
   submitRootCause, exportAnnotatedPgn,
 } from '../api/client'
+import { streamPost } from '../api/sse'
 
 // ── Export helpers ────────────────────────────────────────────────────────────
 
@@ -267,70 +269,6 @@ function buildMarkdownExport({ allGameMoves, annotatedMoves, sessionMeta, reflec
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/**
- * Minimal markdown renderer for LLM output.
- * Handles: **bold**, *italic*, bullet lists (- / * lines), numbered lists, and newlines.
- */
-function Md({ text, className = '' }) {
-  if (!text) return null
-
-  const lines = text.split('\n')
-  const elements = []
-  let listItems = []
-  let listType = null   // 'ul' | 'ol'
-
-  const flushList = () => {
-    if (!listItems.length) return
-    const Tag = listType === 'ol' ? 'ol' : 'ul'
-    const cls = listType === 'ol' ? 'list-decimal list-inside space-y-0.5' : 'list-disc list-inside space-y-0.5'
-    elements.push(
-      <Tag key={elements.length} className={cls}>
-        {listItems.map((item, i) => <li key={i}>{inlineMarkdown(item)}</li>)}
-      </Tag>
-    )
-    listItems = []
-    listType = null
-  }
-
-  lines.forEach((line, idx) => {
-    const ulMatch = line.match(/^[-*]\s+(.+)/)
-    const olMatch = line.match(/^\d+\.\s+(.+)/)
-
-    if (ulMatch) {
-      if (listType === 'ol') flushList()
-      listType = 'ul'
-      listItems.push(ulMatch[1])
-    } else if (olMatch) {
-      if (listType === 'ul') flushList()
-      listType = 'ol'
-      listItems.push(olMatch[1])
-    } else {
-      flushList()
-      if (line.trim() === '') {
-        if (idx > 0) elements.push(<br key={elements.length} />)
-      } else {
-        elements.push(<span key={elements.length} className="block">{inlineMarkdown(line)}</span>)
-      }
-    }
-  })
-  flushList()
-
-  return <div className={className}>{elements}</div>
-}
-
-function inlineMarkdown(text) {
-  // Split on bold (**...**) and italic (*...*)
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g)
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>
-    }
-    if (part.startsWith('*') && part.endsWith('*')) {
-      return <em key={i}>{part.slice(1, -1)}</em>
-    }
-    return part
-  })
-}
 
 function classificationClass(c) {
   const map = {
@@ -1198,19 +1136,33 @@ export default function SelfAnalysis({ userId }) {
       }
       const res = await submitAnnotation(sessionId, payload)
       // Store engine data AND user's own annotation/visual data so the reveal panel can display them
-      setAnnotatedMoves(prev => ({
-        ...prev,
-        [moveIndex]: {
-          ...res.data,
-          user_annotation: annotation,
-          user_candidates: filteredCandidates,
-          user_eval_label: evalLabel,
-          user_squares: currentSquares,
-          user_arrows: currentUserArrows,
-          signal_flags: signalFlags,
-          mistake_reason: mistakeReason,
+      const revealBase = {
+        ...res.data,
+        user_annotation: annotation,
+        user_candidates: filteredCandidates,
+        user_eval_label: evalLabel,
+        user_squares: currentSquares,
+        user_arrows: currentUserArrows,
+        signal_flags: signalFlags,
+        mistake_reason: mistakeReason,
+        explanation: '',   // starts empty; filled by streaming below
+      }
+      setAnnotatedMoves(prev => ({ ...prev, [moveIndex]: revealBase }))
+
+      // Stream the LLM explanation in the background — updates explanation as chunks arrive
+      streamPost(
+        `/selfanalysis/session/${sessionId}/explain-stream`,
+        payload,
+        chunk => {
+          setAnnotatedMoves(prev => {
+            const entry = prev[moveIndex]
+            if (!entry) return prev
+            return { ...prev, [moveIndex]: { ...entry, explanation: (entry.explanation || '') + chunk } }
+          })
         },
-      }))
+      ).catch(() => {
+        // Explanation streaming failed silently — reveal still works without it
+      })
       // Drop the draft for this move — it's now revealed and immutable
       setDraftAnnotations(prev => {
         const next = { ...prev }
@@ -1927,11 +1879,17 @@ export default function SelfAnalysis({ userId }) {
                   </div>
                 )}
 
-                {currentReveal.explanation && (
-                  <div className="border-t border-slate-700 pt-3">
+                {/* Explanation: show streaming placeholder, then text as it arrives */}
+                <div className="border-t border-slate-700 pt-3">
+                  {currentReveal.explanation ? (
                     <Md text={currentReveal.explanation} className="text-sm text-slate-300 leading-relaxed" />
-                  </div>
-                )}
+                  ) : (
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      <span className="inline-block w-1.5 h-3.5 bg-slate-500 animate-pulse rounded-sm" />
+                      Coach is analysing…
+                    </div>
+                  )}
+                </div>
 
                 {/* Post-reveal root cause — only for mistakes and blunders */}
                 {['mistake', 'blunder'].includes(currentReveal.classification) && (

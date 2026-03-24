@@ -86,6 +86,56 @@ async def _call_ollama(
         return None
 
 
+async def _stream_ollama(
+    prompt: str,
+    system: str = SYSTEM_PROMPT,
+    num_predict: int = 400,
+    timeout: float = LLM_TIMEOUT_LONG,
+):
+    """
+    Async generator that yields raw text chunks from Ollama.
+    Handles thinking-model suppression and strips stray <think> blocks.
+    Yields a single error string on failure.
+    """
+    kwargs: dict = dict(
+        model=settings.ollama_model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        stream=True,
+        options={"temperature": 0.3, "num_predict": num_predict},
+    )
+    if _is_thinking_model():
+        kwargs["think"] = False   # skip chain-of-thought
+
+    in_think = False
+    try:
+        async with asyncio.timeout(timeout):
+            async for chunk in await _client.chat(**kwargs):
+                text: str = chunk["message"]["content"] or ""
+                if not text:
+                    continue
+                # Strip <think>…</think> across chunk boundaries
+                if in_think:
+                    if "</think>" in text:
+                        _, _, after = text.partition("</think>")
+                        in_think = False
+                        text = after
+                    else:
+                        continue
+                if "<think>" in text:
+                    before, _, _rest = text.partition("<think>")
+                    in_think = True
+                    text = before
+                if text:
+                    yield text
+    except asyncio.TimeoutError:
+        yield "\n\n*(response timed out)*"
+    except Exception as exc:
+        yield f"\n\n*(coach unavailable: {exc})*"
+
+
 PATTERN_TIP_NAMES = {
     "hanging_piece_missed": "missing hanging pieces",
     "missed_fork": "missing fork opportunities",
@@ -1056,6 +1106,54 @@ Base everything strictly on the data above. Do not invent behaviors not supporte
     return result
 
 
+async def stream_batch_summary(
+    scores: dict,
+    top_patterns: list[dict],
+    games_analyzed: int,
+    raw_metrics: dict = None,
+):
+    """Async generator that streams the batch summary as SSE chunks."""
+    raw = raw_metrics or {}
+    weaknesses = [k for k, v in sorted(scores.items(), key=lambda x: x[1])[:3]]
+    strengths = [k for k, v in sorted(scores.items(), key=lambda x: x[1], reverse=True)[:2]]
+
+    pattern_counts: dict[str, int] = {}
+    for p in top_patterns:
+        ptype = p["type"]
+        pattern_counts[ptype] = pattern_counts.get(ptype, 0) + 1
+    top_issues = sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    issues_text = ", ".join(f"{k.replace('_', ' ')} ({v}x)" for k, v in top_issues) or "none detected"
+
+    behavioral = _detect_behavioral_patterns(scores, raw)
+    behavioral_text = "\n".join(f"- {b}" for b in behavioral) if behavioral else ""
+
+    prompt = f"""Chess performance data from {games_analyzed} games:
+
+Scores (0–100):
+{json.dumps(scores, indent=2)}
+
+Biggest weaknesses: {', '.join(weaknesses)}
+Biggest strengths: {', '.join(strengths)}
+Most frequent issues: {issues_text}
+"""
+    if behavioral_text:
+        prompt += f"""
+Behavioral patterns detected (use these as the narrative backbone — this is what the player ACTUALLY does):
+{behavioral_text}
+"""
+
+    prompt += """
+Write a 3-paragraph coaching summary. Be specific and direct — avoid generic "you should improve X" statements:
+1. Describe the player's style using the behavioral patterns above. Tell a story about HOW they play, not just what score is low.
+2. Identify the 2 most critical areas to address, grounded in the patterns. What specifically happens, and why does it hurt?
+3. One clear, actionable focus for the next training cycle.
+
+Base everything strictly on the data above. Do not invent behaviors not supported by the numbers."""
+
+    async for chunk in _stream_ollama(prompt, num_predict=500, timeout=LLM_TIMEOUT_LONG):
+        yield chunk
+
+
 _STAT_SCORE_LABELS = {
     "eval_accuracy":            "Position evaluation accuracy",
     "candidate_quality":        "Candidate move quality",
@@ -1184,3 +1282,229 @@ async def analyze_self_analysis_stats(stats: dict) -> str:
         fallback_lines.append("**Most common mistake cause:** " + root_causes[0]["label"])
     fallback_lines.append("\n*(AI narrative unavailable — Ollama not reachable)*")
     return "\n".join(fallback_lines)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Streaming variants
+# ────────────────────────────────────────────────────────────────────────────
+
+async def stream_explain_annotation(
+    move_san: str,
+    best_move_san: str,
+    centipawn_loss: float,
+    classification: str,
+    user_annotation: str,
+    user_eval_label: str,
+    eval_verdict: str,
+    user_candidates: list[str],
+    engine_pv_san: list[str],
+    patterns: list[dict],
+    user_color: str = "",
+):
+    """
+    Streaming version of explain_annotation.
+    Yields the deterministic sections immediately, then streams the LLM idea sentence.
+    """
+    parts = []
+
+    # Section 1 — deterministic
+    parts.append(f"Your position assessment ({user_eval_label}): {eval_verdict}.")
+
+    # Section 2 — deterministic
+    user_played_best = bool(
+        move_san and best_move_san and (
+            move_san == best_move_san or
+            move_san.rstrip("+#") == best_move_san.rstrip("+#")
+        )
+    )
+    if user_candidates:
+        candidates_str = ", ".join(c for c in user_candidates if c)
+        norm_candidates = [c.rstrip("+#") for c in user_candidates if c]
+        best_in_list = (
+            best_move_san in user_candidates or
+            (best_move_san or "").rstrip("+#") in norm_candidates
+        )
+        if candidates_str:
+            if user_played_best:
+                parts.append(f"Candidates considered ({candidates_str}): you played the engine's best move.")
+            elif best_in_list:
+                parts.append(f"Candidates considered ({candidates_str}): the engine's best move was among them.")
+            else:
+                parts.append(f"Candidates considered ({candidates_str}): the engine's best move ({best_move_san}) was not in your list.")
+
+    # Section 3 — deterministic
+    if engine_pv_san:
+        pv_labeled = _format_pv_labeled(engine_pv_san, user_color)
+        parts.append(f"Engine best line — {pv_labeled}")
+    else:
+        parts.append(f"Engine best move — {best_move_san}")
+
+    # Section 4 — deterministic
+    if patterns:
+        pattern_names = ", ".join(p["type"].replace("_", " ") for p in patterns[:3])
+        parts.append(f"Pattern(s) detected — {pattern_names}.")
+
+    # Yield all deterministic parts immediately
+    yield "\n\n".join(parts)
+
+    # Section 5 — LLM (streamed)
+    annotation_excerpt = (user_annotation or "")[:200]
+    pv_labeled_short = _format_pv_labeled(engine_pv_san[:4], user_color) if engine_pv_san else best_move_san
+    played_engine_best = (move_san == best_move_san) or classification == "good"
+
+    if played_engine_best:
+        concept_prompt = (
+            f"A chess player played {move_san}, which is the engine's best move. "
+            f"The engine's expected continuation (each move labeled by who plays it): {pv_labeled_short}. "
+            f"The player explained: \"{annotation_excerpt}\". "
+            f"In ONE sentence, confirm what makes this move strong — the concrete chess reason (tactics, structure, activity, etc.). "
+            f"'opp' moves are the opponent's forced responses. Do NOT invent moves or mention squares beyond those listed."
+        )
+    else:
+        concept_prompt = (
+            f"A chess player played {move_san} ({classification}, {centipawn_loss:.0f} cp loss) "
+            f"and explained: \"{annotation_excerpt}\". "
+            f"The engine recommends {best_move_san} with the continuation: {pv_labeled_short}. "
+            f"In ONE sentence, contrast the chess idea behind the player's move vs the engine's recommendation. "
+            f"'opp' moves are the opponent's responses. Do NOT invent moves or mention squares beyond those listed."
+        )
+
+    yield "\n\nKey idea — "
+    async for chunk in _stream_ollama(concept_prompt, num_predict=120, timeout=LLM_TIMEOUT_SHORT):
+        yield chunk
+
+
+async def stream_stats_coaching(stats: dict):
+    """
+    Streaming version of analyze_self_analysis_stats.
+    Builds the prompt from aggregated stats, then streams the full LLM response.
+    """
+    total_sessions = stats.get("total_sessions", 0)
+    total_moves    = stats.get("total_moves_reviewed", 0)
+    avg_scores     = stats.get("avg_scores", {})
+    patterns       = stats.get("pattern_frequency", [])
+    cls_breakdown  = stats.get("classification_breakdown", {})
+    root_causes    = stats.get("root_cause_distribution", [])
+    eval_verdicts  = stats.get("eval_verdict_distribution", {})
+    cand_stats     = stats.get("candidate_stats", {})
+    avg_cp         = stats.get("avg_centipawn_loss")
+    mistake_rate   = stats.get("mistake_rate")
+
+    lines = []
+    lines.append(f"Self-analysis data: {total_sessions} completed session(s), {total_moves} moves reviewed.\n")
+
+    if avg_scores:
+        lines.append("AVERAGE SCORES (0-100):")
+        for key, val in avg_scores.items():
+            label = _STAT_SCORE_LABELS.get(key, key)
+            tag = " ← WEAK" if val < 55 else (" ← STRONG" if val >= 75 else "")
+            lines.append(f"  {label}: {val}{tag}")
+        lines.append("")
+
+    if avg_cp is not None or mistake_rate is not None:
+        lines.append("MOVE QUALITY:")
+        if avg_cp is not None:
+            lines.append(f"  Average centipawn loss: {avg_cp} cp")
+        if mistake_rate is not None:
+            lines.append(f"  Error rate: {mistake_rate}% of reviewed moves")
+        total_non_good = cls_breakdown.get("inaccuracy", 0) + cls_breakdown.get("mistake", 0) + cls_breakdown.get("blunder", 0)
+        if total_non_good:
+            lines.append(f"  Breakdown — inaccuracies: {cls_breakdown.get('inaccuracy',0)}, mistakes: {cls_breakdown.get('mistake',0)}, blunders: {cls_breakdown.get('blunder',0)}")
+        lines.append("")
+
+    top_bad = [p for p in patterns if p["type"] not in ("bishop_knight_trade_ok", "fork", "pin", "checkmate_threat")][:5]
+    if top_bad:
+        lines.append("TOP RECURRING PATTERNS:")
+        for p in top_bad:
+            lines.append(f"  {p['label']}: {p['count']} occurrence(s)")
+        lines.append("")
+
+    if root_causes:
+        lines.append("MISTAKE ROOT CAUSES:")
+        for rc in root_causes:
+            lines.append(f"  {_STAT_RC_LABELS.get(rc['type'], rc['label'])}: {rc['count']} time(s)")
+        lines.append("")
+
+    ev_correct = eval_verdicts.get("correct", 0)
+    ev_slight = eval_verdicts.get("slightly off", 0)
+    ev_sig = eval_verdicts.get("significantly off", 0)
+    ev_total = ev_correct + ev_slight + ev_sig
+    if ev_total > 0:
+        lines.append(f"POSITION EVALUATION: {round(ev_correct/ev_total*100)}% correct assessments.")
+        lines.append("")
+
+    best_pct = cand_stats.get("best_move_found_pct")
+    avg_cands = cand_stats.get("avg_candidates_per_move")
+    if best_pct is not None:
+        lines.append(f"CANDIDATE MOVES: best move found or played in {best_pct}% of positions. Avg {avg_cands} candidates/move.")
+        lines.append("")
+
+    data_block = "\n".join(lines)
+    prompt = (
+        f"{data_block}\n"
+        "Based strictly on the data above, write a concise coaching report in 3 sections using markdown:\n\n"
+        "## What the data shows\n"
+        "In 2-3 sentences, describe the player's current state. Be specific — reference the actual numbers and patterns.\n\n"
+        "## Priority improvements\n"
+        "List 2-3 numbered items, each tied to a specific data point.\n\n"
+        "## One thing to do this week\n"
+        "One concrete, actionable practice task.\n\n"
+        "Rules: Only reference what the data supports. No generic chess advice. No invented patterns."
+    )
+
+    async for chunk in _stream_ollama(prompt, num_predict=600, timeout=LLM_TIMEOUT_LONG):
+        yield chunk
+
+
+async def stream_mental_stats_coaching(stats: dict):
+    """Stream a coaching narrative from mental tutor stats."""
+    total = stats.get("total_sessions", 0)
+    if total == 0:
+        yield "No completed sessions yet — play some mental tutor sessions first."
+        return
+
+    conversion_rate = stats.get("conversion_rate", 0)
+    results = stats.get("results_breakdown", {})
+    errors = stats.get("mental_error_counts", {})
+    most_common = stats.get("most_common_error")
+    clean = stats.get("clean_sessions", 0)
+    avg_change = stats.get("avg_eval_change", 0)
+
+    error_labels = {
+        "rushing": "Rushing (quick suboptimal moves when ahead)",
+        "overcomplication": "Overcomplication (unnecessary complexity from winning positions)",
+        "relaxation": "Loss of Focus (gradual eval erosion over multiple moves)",
+        "tilt": "Tilt (second mistake immediately after first mistake)",
+    }
+
+    lines = []
+    lines.append(f"Mental Tutor data: {total} completed session(s).\n")
+    lines.append(f"RESULTS: Converted={results.get('converted',0)}, Failed={results.get('failed',0)}, Partial={results.get('partial',0)}")
+    lines.append(f"Conversion rate: {conversion_rate}%")
+    lines.append(f"Clean sessions (no mental errors): {clean}/{total} ({round(clean/total*100)}%)")
+    lines.append(f"Average eval change per session: {'+' if avg_change >= 0 else ''}{avg_change} cp\n")
+
+    total_errors = sum(errors.values())
+    if total_errors > 0:
+        lines.append("MENTAL ERROR FREQUENCY:")
+        for etype, count in sorted(errors.items(), key=lambda x: -x[1]):
+            if count > 0:
+                label = error_labels.get(etype, etype)
+                lines.append(f"  {label}: {count} occurrence(s)")
+        lines.append("")
+
+    data_block = "\n".join(lines)
+    prompt = (
+        f"{data_block}\n"
+        "Based strictly on the data above, write a concise mental coaching report in 3 sections using markdown:\n\n"
+        "## Conversion pattern\n"
+        "In 2 sentences, describe how the player handles winning positions based on the data.\n\n"
+        "## Main mental weakness\n"
+        "Identify the most damaging mental error and explain specifically what it causes at the board.\n\n"
+        "## One practice habit\n"
+        "One concrete habit to develop before the next session.\n\n"
+        "Rules: Only reference what the data supports. No generic advice. Be direct and specific."
+    )
+
+    async for chunk in _stream_ollama(prompt, num_predict=400, timeout=LLM_TIMEOUT_LONG):
+        yield chunk

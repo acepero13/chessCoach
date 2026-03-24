@@ -171,6 +171,9 @@ export const playMentalMove = (sessionId, moveUci, moveTimeMs = 0) =>
 export const completeMentalSession = (sessionId) =>
   api.post(`/mental-tutor/session/${sessionId}/complete`)
 
+export const getMentalStats = (userId) =>
+  api.get(`/mental-tutor/${userId}/stats`)
+
 // Drills
 export const getDrillPositions = (userId, includeMistakes = false, limit = 10) =>
   api.get(`/drills/${userId}/positions`, { params: { include_mistakes: includeMistakes, limit } })

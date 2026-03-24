@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Chessboard } from 'react-chessboard'
-import { ChevronLeft, Trophy, AlertTriangle, Flame, Zap, Clock, CheckCircle, XCircle, MinusCircle } from 'lucide-react'
+import { ChevronLeft, Trophy, AlertTriangle, Flame, Zap, Clock, CheckCircle, XCircle, MinusCircle, BarChart2 } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { getMentalScenarios, startMentalSession, playMentalMove, completeMentalSession } from '../api/client'
+import Md from '../components/Md'
 
 const MENTAL_ERROR_META = {
   rushing:         { label: 'Rushing',          color: 'text-orange-400', bg: 'bg-orange-900/30 border-orange-800', icon: Zap },
@@ -183,7 +184,7 @@ export default function MentalTutor({ userId }) {
           <ScenariosPanel
             scenarios={scenarios}
             onSelect={handleSelectScenario}
-            userId={userId}
+            onStats={() => navigate('/mental-tutor-stats')}
           />
         )}
 
@@ -224,7 +225,7 @@ export default function MentalTutor({ userId }) {
 
 // ── Scenarios Panel ────────────────────────────────────────────────────────
 
-function ScenariosPanel({ scenarios, onSelect }) {
+function ScenariosPanel({ scenarios, onSelect, onStats }) {
   if (!scenarios.length) {
     return (
       <div className="bg-chess-panel rounded-xl p-8 text-center">
@@ -236,11 +237,19 @@ function ScenariosPanel({ scenarios, onSelect }) {
 
   return (
     <div>
-      <div className="mb-5">
-        <h2 className="text-xl font-bold text-white">Conversion Training</h2>
-        <p className="text-slate-400 text-sm mt-1">
-          Pick a position from your games where you had a winning advantage. Practice converting it correctly.
-        </p>
+      <div className="flex items-start justify-between mb-5">
+        <div>
+          <h2 className="text-xl font-bold text-white">Conversion Training</h2>
+          <p className="text-slate-400 text-sm mt-1">
+            Pick a position from your games where you had a winning advantage. Practice converting it correctly.
+          </p>
+        </div>
+        <button
+          onClick={onStats}
+          className="flex items-center gap-1.5 text-sm text-chess-gold border border-chess-gold/40 px-3 py-1.5 rounded-lg hover:bg-chess-gold/10 transition-colors flex-shrink-0 ml-4"
+        >
+          <BarChart2 size={14} /> Stats
+        </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {scenarios.map((s, i) => (
@@ -507,7 +516,7 @@ function ReviewPanel({ review, session, onRestart }) {
       {review.coaching && (
         <div className="bg-chess-panel rounded-xl p-4 border border-chess-gold/20">
           <h3 className="text-chess-gold font-semibold text-sm mb-2">Coach Feedback</h3>
-          <p className="text-slate-300 text-sm leading-relaxed">{review.coaching}</p>
+          <Md text={review.coaching} className="text-slate-300 text-sm leading-relaxed" />
         </div>
       )}
 

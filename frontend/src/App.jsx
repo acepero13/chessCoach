@@ -8,6 +8,7 @@ import SelfAnalysisStats from './pages/SelfAnalysisStats'
 import ReviewedGames from './pages/ReviewedGames'
 import GameReview from './pages/GameReview'
 import MentalTutor from './pages/MentalTutor'
+import MentalTutorStats from './pages/MentalTutorStats'
 import Drills from './pages/Drills'
 import Review from './pages/Review'
 
@@ -63,6 +64,10 @@ export default function App() {
         <Route
           path="/mental-tutor"
           element={<MentalTutor userId={userId} />}
+        />
+        <Route
+          path="/mental-tutor-stats"
+          element={<MentalTutorStats userId={userId} />}
         />
         <Route
           path="/drills"
