@@ -274,6 +274,7 @@ export default function Dashboard({ userId, username, setUser }) {
               { label: 'Mental Tutor', onClick: () => navigate('/mental-tutor') },
               { label: 'Calculation Drills', onClick: () => navigate('/drills') },
               { label: 'Spaced Review', onClick: () => navigate('/review') },
+              { label: 'Endgame Analysis', onClick: () => navigate('/endgame') },
             ]} />
             <StatsCard navigate={navigate} />
           </div>

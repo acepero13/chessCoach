@@ -11,6 +11,7 @@ import MentalTutor from './pages/MentalTutor'
 import MentalTutorStats from './pages/MentalTutorStats'
 import Drills from './pages/Drills'
 import Review from './pages/Review'
+import EndgameAnalysis from './pages/EndgameAnalysis'
 
 export default function App() {
   const [userId, setUserIdState] = useState(() => {
@@ -80,6 +81,10 @@ export default function App() {
         <Route
           path="/self-analysis-stats"
           element={<SelfAnalysisStats userId={userId} />}
+        />
+        <Route
+          path="/endgame"
+          element={<EndgameAnalysis userId={userId} />}
         />
       </Routes>
     </BrowserRouter>

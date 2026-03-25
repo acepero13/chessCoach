@@ -207,3 +207,7 @@ export const answerCard = (cardId, correct) =>
 // Admin
 export const resetDatabase = () =>
   api.delete('/admin/reset')
+
+// Endgame
+export const getEndgameProfile = (userId) =>
+  api.get(`/endgame/${userId}/profile`)

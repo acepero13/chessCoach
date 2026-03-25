@@ -1508,3 +1508,56 @@ async def stream_mental_stats_coaching(stats: dict):
 
     async for chunk in _stream_ollama(prompt, num_predict=400, timeout=LLM_TIMEOUT_LONG):
         yield chunk
+
+
+async def stream_endgame_coaching(profile: dict):
+    """Stream an endgame coaching report grounded in measured metrics."""
+    from ..analysis.endgame_analyzer import CATEGORY_LABELS, MENTAL_PATTERN_LABELS
+
+    categories = profile.get("categories", {})
+    weakest    = profile.get("weakest_category")
+    total_eg   = profile.get("total_endgame_games", 0)
+    collapses  = profile.get("collapse_count", 0)
+    mental     = profile.get("mental_patterns", {})
+
+    cat_lines = []
+    for cat, v in categories.items():
+        parts = [
+            f"{v['label']}: {v['games']} game(s)",
+            f"avg CPL {v['avg_cpl']}",
+            f"blunder rate {v['blunder_rate']:.1%}",
+        ]
+        if v.get("conversion_rate") is not None:
+            parts.append(f"conversion {v['conversion_rate']:.0%}")
+        if v.get("holding_rate") is not None:
+            parts.append(f"holding {v['holding_rate']:.0%}")
+        if v.get("collapse_count", 0) > 0:
+            parts.append(f"{v['collapse_count']} collapse(s)")
+        cat_lines.append("  - " + ", ".join(parts))
+
+    mental_lines = [
+        f"  - {MENTAL_PATTERN_LABELS.get(k, k)}: {v} time(s)"
+        for k, v in mental.items() if v > 0
+    ] or ["  - None detected"]
+
+    weakest_label = CATEGORY_LABELS.get(weakest, weakest) if weakest else "unknown"
+
+    prompt = (
+        f"You are a chess endgame coach. Below is a player's measured endgame statistics "
+        f"from {total_eg} games with endgame phases. Write a direct, data-driven coaching report.\n\n"
+        f"CATEGORY PERFORMANCE:\n" + "\n".join(cat_lines) + "\n\n"
+        f"Weakest category: {weakest_label}\n"
+        f"Total collapse events: {collapses}\n\n"
+        f"MENTAL PATTERNS IN COLLAPSES:\n" + "\n".join(mental_lines) + "\n\n"
+        "Write exactly 3 sections:\n\n"
+        "## Key Weakness\n"
+        "One paragraph identifying the primary technical problem with specific numbers.\n\n"
+        "## Mental Pattern\n"
+        "One paragraph connecting technical failures to psychological behavior.\n\n"
+        "## This Week's Practice\n"
+        "2-3 concrete drills targeting the weakest area. Reference the actual numbers.\n\n"
+        "Rules: Only use the data provided. No generic advice. Be specific and direct."
+    )
+
+    async for chunk in _stream_ollama(prompt, num_predict=500, timeout=LLM_TIMEOUT_LONG):
+        yield chunk

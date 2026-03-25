@@ -105,6 +105,129 @@ ENDGAME_POOL = [
     ),
 ]
 
+# ── Endgame: category-specific pools ────────────────────────────────────────
+
+ROOK_ENDGAME_POOL = [
+    Task(
+        label="lichess.org/practice — Lucena position (10 positions)",
+        duration_min=15,
+        category="endgame",
+        instructions=(
+            "lichess.org/practice → Endgame → Rook endings → Lucena. "
+            "The Lucena is the fundamental winning technique in rook endgames. "
+            "Master 'building a bridge' — this position decides ~40% of rook endgames."
+        ),
+    ),
+    Task(
+        label="lichess.org/practice — Philidor position (10 positions)",
+        duration_min=15,
+        category="endgame",
+        instructions=(
+            "lichess.org/practice → Endgame → Rook endings → Philidor. "
+            "The Philidor is the key drawing technique when defending. "
+            "Rule: keep the rook on the 6th rank until the enemy king advances, then switch to checks."
+        ),
+    ),
+    Task(
+        label="De la Villa '100 Endgames' — Ch.4–8: Rook endings (read + solve)",
+        duration_min=25,
+        category="endgame",
+        instructions=(
+            "Work through each diagram with a board. "
+            "These chapters cover Lucena, Philidor, and rook activity principles. "
+            "Key rule: in rook endgames, activity of the rook > material count."
+        ),
+    ),
+    Task(
+        label="Lichess puzzles: Rook Endgame theme — 15 puzzles",
+        duration_min=15,
+        category="endgame",
+        instructions=(
+            "lichess.org/training → Themes → RookEndgame. "
+            "After each puzzle: identify whether it was a Lucena-type (winning) or Philidor-type (saving). "
+            "This is the most critical endgame category to master."
+        ),
+    ),
+]
+
+KING_PAWN_POOL = [
+    Task(
+        label="lichess.org/practice — King & Pawn endings: Opposition (10 positions)",
+        duration_min=15,
+        category="endgame",
+        instructions=(
+            "lichess.org/practice → Endgame → King & Pawn → Opposition. "
+            "Opposition is the foundation of all K+P endings. "
+            "Rule: the king with the opposition controls key squares; the enemy king must step aside."
+        ),
+    ),
+    Task(
+        label="lichess.org/practice — King & Pawn endings: Key Squares (10 positions)",
+        duration_min=15,
+        category="endgame",
+        instructions=(
+            "lichess.org/practice → Endgame → King & Pawn → Key Squares. "
+            "If your king reaches a key square, the pawn promotes regardless. "
+            "Memorise the key squares for e-, d-, and f-pawns — they appear in every game."
+        ),
+    ),
+    Task(
+        label="De la Villa '100 Endgames' — Ch.1–3: K+P opposition and key squares (solve)",
+        duration_min=20,
+        category="endgame",
+        instructions=(
+            "Work through every diagram. Cover the solution and try for 2 minutes before revealing. "
+            "Chapters 1–3 cover opposition, triangulation, and the pawn race — "
+            "the three ideas that decide 90% of K+P endings."
+        ),
+    ),
+    Task(
+        label="Lichess puzzles: Pawn Endgame theme — 15 puzzles",
+        duration_min=15,
+        category="endgame",
+        instructions=(
+            "lichess.org/training → Themes → PawnEndgame. "
+            "Before each puzzle, ask: which side has the opposition? Who wins the pawn race? "
+            "These two questions resolve most pawn endings."
+        ),
+    ),
+]
+
+MINOR_PIECE_POOL = [
+    Task(
+        label="lichess.org/practice — Bishop endings (10 positions)",
+        duration_min=15,
+        category="endgame",
+        instructions=(
+            "lichess.org/practice → Endgame → Bishop endings. "
+            "Key rule: wrong-coloured bishop cannot stop a rook pawn from the corner. "
+            "Always check: are both bishops the same colour as the promotion square?"
+        ),
+    ),
+    Task(
+        label="De la Villa '100 Endgames' — Minor piece chapter (read + solve)",
+        duration_min=20,
+        category="endgame",
+        instructions=(
+            "Focus on bishop vs knight technique. "
+            "Rule: bishops dominate open positions (few pawns), knights excel in closed ones. "
+            "After reading: review one of your recent minor piece endings in Lichess analysis."
+        ),
+    ),
+]
+
+ENDGAME_COLLAPSE_TASK = Task(
+    label="Conversion drill — play winning endgame positions vs Stockfish (no take-backs)",
+    duration_min=20,
+    category="endgame",
+    instructions=(
+        "Set up a winning endgame position from your games in Lichess board editor. "
+        "Play it out vs Stockfish level 5 with no take-backs. "
+        "Goal: do NOT rush. Make each move purposefully. "
+        "If you blunder, note the position — this is your collapse pattern."
+    ),
+)
+
 # ── Tactics — themed pools ───────────────────────────────────────────────────
 
 PIN_POOL = [
@@ -560,7 +683,7 @@ def _identify_weaknesses(profile: dict) -> list[tuple[str, float]]:
     return sorted(scored, key=lambda x: x[1])
 
 
-def _pool_for(weakness: str, raw: dict) -> list[Task]:
+def _pool_for(weakness: str, raw: dict, endgame_profile: dict | None = None) -> list[Task]:
     """Return the ranked task pool for a weakness domain."""
     if weakness == "tactics":
         # Build a pool ordered by frequency of each missed pattern
@@ -602,6 +725,23 @@ def _pool_for(weakness: str, raw: dict) -> list[Task]:
         return pool
 
     if weakness in ("endgame", "conversion"):
+        # Use category-specific pool if endgame profile data is available
+        if endgame_profile:
+            weakest_cat = endgame_profile.get("weakest_category")
+            collapses   = endgame_profile.get("collapse_count", 0)
+            pool: list[Task] = []
+            if weakest_cat == "rook":
+                pool = ROOK_ENDGAME_POOL[:]
+            elif weakest_cat == "king_pawn":
+                pool = KING_PAWN_POOL[:]
+            elif weakest_cat == "minor_piece":
+                pool = MINOR_PIECE_POOL[:]
+            else:
+                pool = ENDGAME_POOL[:]
+            # Add conversion drill if collapses detected
+            if collapses > 0:
+                pool.insert(1, ENDGAME_COLLAPSE_TASK)
+            return pool
         return ENDGAME_POOL[:]
 
     if weakness == "opening":
@@ -687,7 +827,7 @@ def _warmup_for(primary: str, raw: dict) -> Task:
     )
 
 
-def _week_subtitle(weakness: str, raw: dict) -> str:
+def _week_subtitle(weakness: str, raw: dict, endgame_profile: dict | None = None) -> str:
     if weakness == "tactics":
         parts = []
         if raw.get("missed_pins", 0):     parts.append(f"{raw['missed_pins']} missed pin(s)")
@@ -705,6 +845,19 @@ def _week_subtitle(weakness: str, raw: dict) -> str:
         return ("Positional issues: " + ", ".join(parts)) if parts else "Strategic understanding needs work"
 
     if weakness in ("endgame", "conversion"):
+        if endgame_profile:
+            cats = endgame_profile.get("categories", {})
+            weakest_cat = endgame_profile.get("weakest_category")
+            cat_data = cats.get(weakest_cat, {})
+            label = cat_data.get("label", weakest_cat or "endgame")
+            conv = cat_data.get("conversion_rate")
+            collapses = endgame_profile.get("collapse_count", 0)
+            parts = [f"Weakest in {label}"]
+            if conv is not None:
+                parts.append(f"{round(conv * 100)}% conversion rate")
+            if collapses > 0:
+                parts.append(f"{collapses} collapse event(s)")
+            return " — ".join(parts)
         wt = raw.get("winning_games_total", 0)
         if wt:
             wc = raw.get("winning_games_converted", 0)
@@ -744,13 +897,14 @@ def _build_week(
     primary_score: float,
     raw: dict,
     profile: dict,
+    endgame_profile: dict | None = None,
 ) -> Week:
-    primary_pool   = _pool_for(primary, raw)
-    secondary_pool = _pool_for(secondary, raw)
+    primary_pool   = _pool_for(primary, raw, endgame_profile)
+    secondary_pool = _pool_for(secondary, raw, endgame_profile)
     warmup = _warmup_for(primary, raw)
 
     time_control = TIME_CONTROLS.get(primary, TIME_CONTROLS["default"])
-    subtitle = _week_subtitle(primary, raw)
+    subtitle = _week_subtitle(primary, raw, endgame_profile)
 
     themes = {
         1: f"Foundation — identify your {primary.replace('_', ' ')} gaps",
@@ -812,7 +966,11 @@ def _build_week(
 # Public API
 # ---------------------------------------------------------------------------
 
-def generate_training_plan(profile: dict, raw_metrics: dict | None = None) -> TrainingPlan:
+def generate_training_plan(
+    profile: dict,
+    raw_metrics: dict | None = None,
+    endgame_profile: dict | None = None,
+) -> TrainingPlan:
     raw = raw_metrics or {}
     weaknesses = _identify_weaknesses(profile)
     primary_weakness, primary_score = weaknesses[0]
@@ -826,6 +984,7 @@ def generate_training_plan(profile: dict, raw_metrics: dict | None = None) -> Tr
             primary_score=primary_score,
             raw=raw,
             profile=profile,
+            endgame_profile=endgame_profile,
         )
         for wn in range(1, 5)
     ]
@@ -857,7 +1016,32 @@ def generate_training_plan(profile: dict, raw_metrics: dict | None = None) -> Tr
             f"{raw['blunder_clusters']} blunder cluster(s) found — after any mistake, "
             "stop, breathe, re-scan the whole board before your next move."
         )
-    if raw.get("endgame_blunders", 0) > 0 or _get_score(profile, "endgame") < 55:
+    if endgame_profile:
+        cats = endgame_profile.get("categories", {})
+        weakest_cat = endgame_profile.get("weakest_category")
+        collapses = endgame_profile.get("collapse_count", 0)
+        mental = endgame_profile.get("mental_patterns", {})
+        if weakest_cat and weakest_cat in cats:
+            cat_data = cats[weakest_cat]
+            label = cat_data.get("label", weakest_cat)
+            conv = cat_data.get("conversion_rate")
+            conv_str = f" ({round(conv * 100)}% conversion)" if conv is not None else ""
+            notes.append(
+                f"Your weakest endgame category is {label}{conv_str}. "
+                "Drills this week are targeted specifically at this area."
+            )
+        if collapses > 0:
+            top_pattern = max(mental.items(), key=lambda x: x[1], default=(None, 0))[0]
+            pattern_desc = {
+                "rushing_when_winning": "rushing when you have a winning advantage",
+                "loss_of_focus_after_mistake": "losing focus after a mistake",
+                "overcomplication": "overcomplicating winning positions",
+            }.get(top_pattern, "mental pressure in endgames")
+            notes.append(
+                f"{collapses} endgame collapse(s) detected — primarily caused by {pattern_desc}. "
+                "Conversion drills are included to address this directly."
+            )
+    elif raw.get("endgame_blunders", 0) > 0 or _get_score(profile, "endgame") < 55:
         notes.append(
             "Endgame technique is weak. Start with De la Villa '100 Endgames You Must Know' "
             "and lichess.org/practice → Endgame — 15 minutes daily, every day."

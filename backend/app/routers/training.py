@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.models import PerformanceProfile, TrainingPlan
+from app.models import PerformanceProfile, TrainingPlan, Game, GameAnalysis
 from app.training.plan_generator import generate_training_plan, plan_to_dict
 from app.llm.explainer import generate_batch_summary, stream_batch_summary
 from app.llm.coach_memory import get_or_create_memory
+from app.analysis.endgame_analyzer import analyze_endgame_performance
 
 router = APIRouter(prefix="/training", tags=["training"])
 
@@ -41,7 +42,24 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
         "mental_stability_score": profile.mental_stability_score,
     }
 
-    plan = generate_training_plan(profile_dict, raw_metrics=profile.raw_metrics or {})
+    # Compute endgame profile to feed category-specific drills
+    eg_rows = await db.execute(
+        select(Game, GameAnalysis)
+        .join(GameAnalysis, GameAnalysis.game_id == Game.id)
+        .where(Game.user_id == user_id, GameAnalysis.status == "complete")
+    )
+    endgame_profile = None
+    try:
+        games_data = [
+            {"result": g.result, "user_color": g.user_color, "move_evaluations": a.move_evaluations or []}
+            for g, a in eg_rows.all()
+        ]
+        if games_data:
+            endgame_profile = analyze_endgame_performance(games_data)
+    except Exception:
+        pass  # non-critical — plan still works without it
+
+    plan = generate_training_plan(profile_dict, raw_metrics=profile.raw_metrics or {}, endgame_profile=endgame_profile)
     plan_dict = plan_to_dict(plan)
 
     # Save plan
