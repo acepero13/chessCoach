@@ -51,12 +51,13 @@ export const ROOT_CAUSE_LABELS = {
 // ── Tactic badge metadata ─────────────────────────────────────────────────────
 
 export const TACTIC_META = {
-  missed_fork:         { label: 'Missed Fork',         icon: GitBranch,   color: 'bg-orange-900/80 border-orange-500 text-orange-300' },
-  missed_pin:          { label: 'Missed Pin',           icon: Pin,         color: 'bg-purple-900/80 border-purple-500 text-purple-300' },
-  missed_checkmate:    { label: 'Missed Mate',          icon: Crown,       color: 'bg-red-900/80 border-red-500 text-red-300' },
-  hanging_piece_missed:{ label: 'Free Piece',           icon: Crosshair,   color: 'bg-yellow-900/80 border-yellow-500 text-yellow-300' },
-  blunder_hanging:     { label: 'Piece Left Hanging',   icon: AlertOctagon,color: 'bg-red-900/80 border-red-600 text-red-300' },
-  tactical_shot_found: { label: 'Tactic Found!',        icon: Zap,         color: 'bg-green-900/80 border-green-500 text-green-300' },
+  missed_fork:              { label: 'Missed Fork',       icon: GitBranch,    color: 'bg-orange-900/80 border-orange-500 text-orange-300', iconClass: 'text-orange-400' },
+  missed_pin:               { label: 'Missed Pin',         icon: Pin,          color: 'bg-purple-900/80 border-purple-500 text-purple-300', iconClass: 'text-purple-400' },
+  missed_checkmate:         { label: 'Missed Mate',        icon: Crown,        color: 'bg-red-900/80 border-red-500 text-red-300',          iconClass: 'text-red-400'    },
+  missed_discovered_attack: { label: 'Missed Discovery',   icon: Zap,          color: 'bg-blue-900/80 border-blue-500 text-blue-300',       iconClass: 'text-blue-400'   },
+  hanging_piece_missed:     { label: 'Free Piece',         icon: Crosshair,    color: 'bg-yellow-900/80 border-yellow-500 text-yellow-300', iconClass: 'text-yellow-400' },
+  blunder_hanging:          { label: 'Piece Left Hanging', icon: AlertOctagon, color: 'bg-red-900/80 border-red-600 text-red-300',          iconClass: 'text-red-500'    },
+  tactical_shot_found:      { label: 'Tactic Found!',      icon: Zap,          color: 'bg-green-900/80 border-green-500 text-green-300',    iconClass: 'text-green-400'  },
 }
 
 // ── Arrow helpers ─────────────────────────────────────────────────────────────

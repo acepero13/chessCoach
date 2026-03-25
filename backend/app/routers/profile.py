@@ -12,9 +12,6 @@ from app.analysis.score_calculator import compute_all_scores
 from app.analysis.game_selector import select_critical_games
 from app.schemas.profile import PerformanceScoresResponse, ProfileSummary
 from app.llm.explainer import generate_pattern_tip, explain_single_tactic
-from app.engine.stockfish import MoveEval
-from app.patterns.tactical_detectors import detect_tactical_patterns
-from app.patterns.strategic_detectors import detect_strategic_patterns
 
 def _compute_archetype(scores: dict) -> str:
     """Determine player archetype from performance scores. Fully deterministic."""
@@ -595,38 +592,18 @@ async def get_pattern_drill(
     for a in analyses:
         user_color = game_color_map.get(a.game_id, "white")
         raw_evals = a.move_evaluations or []
-        if not raw_evals:
-            continue
+        stored_patterns = a.patterns_detected or []
 
-        # Re-run pattern detection fresh from stored move_evaluations.
-        # Stored patterns_detected may be stale from older (buggy) detection code.
-        # This is pure Python — no engine calls — so it's fast.
-        move_evals = [
-            MoveEval(
-                fen=e["fen"], move_uci=e["move_uci"], move_san=e["move_san"],
-                eval_before=e["eval_before"], eval_after=e["eval_after"],
-                best_move_uci=e["best_move_uci"], best_move_san=e["best_move_san"],
-                eval_best=e["eval_best"], centipawn_loss=e["centipawn_loss"],
-                classification=e["classification"], is_capture=e["is_capture"],
-                is_check=e["is_check"], move_number=e["move_number"], color=e["color"],
-            )
-            for e in raw_evals
-            if all(k in e for k in ("fen", "move_uci", "move_san", "eval_before",
-                                    "eval_after", "best_move_uci", "best_move_san",
-                                    "eval_best", "centipawn_loss", "classification",
-                                    "is_capture", "is_check", "move_number", "color"))
-        ]
-
-        fresh_patterns = detect_tactical_patterns(move_evals) + detect_strategic_patterns(move_evals)
-
-        # Build eval lookup by (move_number, color) to avoid fullmove_number collision
+        # Build eval lookup by (move_number, color) for enrichment
         eval_by_move: dict[tuple[int, str], dict] = {
             (e["move_number"], e["color"]): e
             for e in raw_evals
             if "move_number" in e and "color" in e
         }
 
-        for p in fresh_patterns:
+        # Use stored patterns — these are what the progress/count endpoints use,
+        # so the positions returned here always match the game counts shown in the UI.
+        for p in stored_patterns:
             if p.get("type") != pattern_type:
                 continue
             if p.get("color") != user_color:

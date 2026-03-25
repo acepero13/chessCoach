@@ -262,6 +262,7 @@ export default function AnnotatingPhase({
               allGameMoves={allGameMoves}
               navIdx={navIdx}
               annotatedMoves={annotatedMoves}
+              showTactics={showEngineArrows}
               onSelect={onNavigate}
             />
           </div>

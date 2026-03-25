@@ -46,6 +46,7 @@ class MoveEval:
     move_number: int
     color: str                  # "white" or "black"
     pv_san: list = None         # engine principal variation in SAN (up to 5 moves)
+    pv_uci: list = None         # engine principal variation in UCI (up to 5 moves)
     clock_remaining: float = None  # seconds left on clock after this move (from %clk)
 
 
@@ -172,6 +173,7 @@ class StockfishEngine:
             best_move_san = boards[i].san(best_move_obj)
             eval_best = _pov_cp(info_before["score"], color)
             pv_san = _pv_uci_to_san_board(boards[i], pv_moves[:5])
+            pv_uci = [m.uci() for m in pv_moves[:5]]
 
             # Eval of position after actual move, from the original mover's perspective
             # info_after is from the opponent's (not color) perspective, so negate
@@ -202,6 +204,7 @@ class StockfishEngine:
                 move_number=boards[i].fullmove_number,
                 color=color_str,
                 pv_san=pv_san,
+                pv_uci=pv_uci,
                 clock_remaining=clocks[i],
             ))
             board.push(move)

@@ -1,7 +1,7 @@
 import { useRef, useMemo, useEffect } from 'react'
-import { DOT_COLOR } from '../../pages/selfanalysis/constants'
+import { DOT_COLOR, TACTIC_META } from '../../pages/selfanalysis/constants'
 
-function MoveCell({ move, isCurrent, annotatedMoves, onSelect, currentRef }) {
+function MoveCell({ move, isCurrent, annotatedMoves, showTactics, onSelect, currentRef }) {
   if (!move) return <span className="flex-1 min-w-0" />
 
   const reveal = annotatedMoves?.[move.move_index]
@@ -9,10 +9,16 @@ function MoveCell({ move, isCurrent, annotatedMoves, onSelect, currentRef }) {
     ? (DOT_COLOR[reveal.classification] ?? '#94a3b8')
     : null
 
+  // Tactic icon — only when engine assistance is toggled on
+  const tacticPattern = showTactics ? reveal?.patterns?.find(p => TACTIC_META[p.type]) : null
+  const tacticMeta = tacticPattern ? TACTIC_META[tacticPattern.type] : null
+  const TacticIcon = tacticMeta?.icon ?? null
+
   return (
     <button
       ref={currentRef}
       onClick={() => onSelect(move.globalIdx)}
+      title={tacticMeta ? tacticMeta.label : undefined}
       className={`flex-1 min-w-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-left text-xs font-mono transition-colors ${
         isCurrent
           ? 'bg-chess-gold text-chess-dark font-bold'
@@ -31,11 +37,14 @@ function MoveCell({ move, isCurrent, annotatedMoves, onSelect, currentRef }) {
         <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 border border-slate-600" />
       )}
       <span className="truncate">{move.move_san}</span>
+      {TacticIcon && !isCurrent && (
+        <TacticIcon size={9} className={`flex-shrink-0 opacity-80 ${tacticMeta.iconClass}`} />
+      )}
     </button>
   )
 }
 
-export default function MoveList({ allGameMoves, navIdx, annotatedMoves, onSelect }) {
+export default function MoveList({ allGameMoves, navIdx, annotatedMoves, showTactics, onSelect }) {
   const currentRef = useRef(null)
 
   // Group moves into rows: { moveNumber, white, black }
@@ -82,6 +91,7 @@ export default function MoveList({ allGameMoves, navIdx, annotatedMoves, onSelec
               move={row.white}
               isCurrent={row.white?.globalIdx === navIdx}
               annotatedMoves={annotatedMoves}
+              showTactics={showTactics}
               onSelect={onSelect}
               currentRef={row.white?.globalIdx === navIdx ? currentRef : null}
             />
@@ -89,6 +99,7 @@ export default function MoveList({ allGameMoves, navIdx, annotatedMoves, onSelec
               move={row.black}
               isCurrent={row.black?.globalIdx === navIdx}
               annotatedMoves={annotatedMoves}
+              showTactics={showTactics}
               onSelect={onSelect}
               currentRef={row.black?.globalIdx === navIdx ? currentRef : null}
             />

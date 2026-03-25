@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Chessboard } from 'react-chessboard'
 import { X, ChevronLeft, ChevronRight, Lightbulb, Loader } from 'lucide-react'
 import { getPatternDrill, getPatternExplain } from '../api/client'
+import { TACTIC_META } from '../pages/selfanalysis/constants'
 
 const PATTERN_LABEL = {
   fork: 'Fork (missed)',
@@ -166,7 +167,7 @@ export default function PatternDrillModal({ userId, patternType, totalGames, onC
               </div>
 
               {/* Board */}
-              <div className="rounded-xl overflow-hidden">
+              <div className="relative rounded-xl overflow-hidden">
                 {pos?.fen && (
                   <Chessboard
                     key={`${pos.fen}-${showBestMove}`}
@@ -193,6 +194,17 @@ export default function PatternDrillModal({ userId, patternType, totalGames, onC
                     }}
                   />
                 )}
+                {showBestMove && (() => {
+                  const meta = TACTIC_META[patternType]
+                  if (!meta) return null
+                  const Icon = meta.icon
+                  return (
+                    <div className={`absolute top-2 left-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-semibold backdrop-blur-sm shadow-lg ${meta.color}`}>
+                      <Icon size={13} />
+                      {meta.label}
+                    </div>
+                  )
+                })()}
               </div>
 
               {/* Reveal toggle */}
