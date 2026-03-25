@@ -369,8 +369,8 @@ export default function SelfAnalysisStats({ userId }) {
                     <YAxis
                       type="category"
                       dataKey="label"
-                      width={160}
-                      tick={{ fontSize: 11, fill: '#94a3b8' }}
+                      width={120}
+                      tick={{ fontSize: 10, fill: '#94a3b8' }}
                     />
                     <Tooltip
                       formatter={(val, name) => [val, 'Occurrences']}

@@ -34,12 +34,14 @@ from app.config import settings as _settings
 _allowed_origins = [
     f"http://localhost:{_settings.frontend_port}",
     "http://localhost:3000",
+    "http://192.168.2.115:5173",
+    "http://192.168.2.115:3000",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

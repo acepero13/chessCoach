@@ -3,7 +3,7 @@ import { TIME_BUDGETS } from './constants'
 
 export default function SetupPhase({ timeBudget, setTimeBudget, customBudget, setCustomBudget, onStart, loading, error, onBack }) {
   return (
-    <div className="min-h-screen bg-chess-dark p-6">
+    <div className="min-h-screen bg-chess-dark p-3 sm:p-6">
       <div className="max-w-lg mx-auto">
         <button onClick={onBack} className="flex items-center gap-1 text-slate-400 hover:text-white text-sm mb-6">
           <ChevronLeft size={16} /> Dashboard

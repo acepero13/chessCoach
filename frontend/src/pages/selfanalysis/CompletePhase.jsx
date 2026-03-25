@@ -42,7 +42,7 @@ export default function CompletePhase({ reflection, gameResult, onDashboard, onN
   const feelingTags = q.feelings || []
 
   return (
-    <div className="min-h-screen bg-chess-dark p-6">
+    <div className="min-h-screen bg-chess-dark p-3 sm:p-6">
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center gap-3 mb-6">
           <Trophy size={32} className="text-chess-gold" />
@@ -54,7 +54,7 @@ export default function CompletePhase({ reflection, gameResult, onDashboard, onN
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
           {scores.map(s => <ScoreCard key={s.name} label={s.name} score={s.value} color={s.color} />)}
         </div>
 

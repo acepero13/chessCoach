@@ -194,12 +194,12 @@ export default function Dashboard({ userId, username, setUser }) {
   const TABS = ['overview', 'insights', 'import', 'games']
 
   return (
-    <div className="min-h-screen bg-chess-dark p-6">
+    <div className="min-h-screen bg-chess-dark p-3 sm:p-6">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-3xl font-bold text-chess-gold">♟ Chess Coach</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-chess-gold">♟ Chess Coach</h1>
             <p className="text-slate-400 text-sm mt-1">
               {username || (userId ? `User #${userId}` : 'Not signed in')} ·{' '}
               {games.length} games imported · {analyzedCount} analyzed
@@ -261,7 +261,7 @@ export default function Dashboard({ userId, username, setUser }) {
 
         {/* Action cards */}
         {profile && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
             <MultiCard icon={<BookOpen size={18} />} title="Coaching" items={[
               { label: 'Start coaching session', onClick: handleStartCoaching },
               { label: 'Create training plan', onClick: () => navigate('/training') },
@@ -285,7 +285,7 @@ export default function Dashboard({ userId, username, setUser }) {
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize ${
+              className={`px-2.5 sm:px-4 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors capitalize ${
                 tab === t ? 'bg-chess-accent text-white' : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -482,7 +482,7 @@ function InsightsTab({ profileHistory, patternStats, progress, loading, onRefres
               <YAxis
                 type="category"
                 dataKey="name"
-                width={170}
+                width={120}
                 tick={{ fontSize: 10, fill: '#94a3b8' }}
               />
               <Tooltip
@@ -512,19 +512,19 @@ function InsightsTab({ profileHistory, patternStats, progress, loading, onRefres
 
 function MultiCard({ icon, title, items }) {
   return (
-    <div className="bg-chess-panel rounded-xl p-4 flex flex-col gap-2">
-      <div className="flex items-center gap-2 mb-1">
+    <div className="bg-chess-panel rounded-xl p-2.5 sm:p-4 flex flex-col gap-1 sm:gap-2">
+      <div className="flex items-center gap-1.5 mb-0.5 sm:mb-1">
         <div className="text-chess-gold flex-shrink-0">{icon}</div>
-        <span className="font-semibold text-white text-sm">{title}</span>
+        <span className="font-semibold text-white text-xs sm:text-sm">{title}</span>
       </div>
       {items.map(({ label, onClick }) => (
         <button
           key={label}
           onClick={onClick}
-          className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-2 py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
+          className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
         >
-          <span>{label}</span>
-          <ChevronRight size={12} className="text-slate-600 group-hover:text-chess-gold transition-colors" />
+          <span className="text-left leading-tight">{label}</span>
+          <ChevronRight size={11} className="text-slate-600 group-hover:text-chess-gold transition-colors flex-shrink-0 ml-1" />
         </button>
       ))}
     </div>
@@ -533,24 +533,24 @@ function MultiCard({ icon, title, items }) {
 
 function StatsCard({ navigate }) {
   return (
-    <div className="bg-chess-panel rounded-xl p-4 flex flex-col gap-2">
-      <div className="flex items-center gap-2 mb-1">
+    <div className="bg-chess-panel rounded-xl p-2.5 sm:p-4 flex flex-col gap-1 sm:gap-2">
+      <div className="flex items-center gap-1.5 mb-0.5 sm:mb-1">
         <BarChart2 size={18} className="text-chess-gold flex-shrink-0" />
-        <span className="font-semibold text-white text-sm">Statistics</span>
+        <span className="font-semibold text-white text-xs sm:text-sm">Statistics</span>
       </div>
       <button
         onClick={() => navigate('/self-analysis-stats')}
-        className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-2 py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
+        className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
       >
         <span>Self-Analysis</span>
-        <ChevronRight size={12} className="text-slate-600 group-hover:text-chess-gold transition-colors" />
+        <ChevronRight size={11} className="text-slate-600 group-hover:text-chess-gold transition-colors flex-shrink-0 ml-1" />
       </button>
       <button
         onClick={() => navigate('/mental-tutor-stats')}
-        className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-2 py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
+        className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
       >
         <span>Mental Tutor</span>
-        <ChevronRight size={12} className="text-slate-600 group-hover:text-chess-gold transition-colors" />
+        <ChevronRight size={11} className="text-slate-600 group-hover:text-chess-gold transition-colors flex-shrink-0 ml-1" />
       </button>
     </div>
   )

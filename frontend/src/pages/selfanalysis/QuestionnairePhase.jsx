@@ -38,7 +38,7 @@ export default function QuestionnairePhase({ feelings, setFeelings, gameResult, 
   const textareaClass = "w-full bg-chess-dark border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-chess-gold resize-none"
 
   return (
-    <div className="min-h-screen bg-chess-dark p-6">
+    <div className="min-h-screen bg-chess-dark p-3 sm:p-6">
       <div className="max-w-xl mx-auto">
         <div className="bg-chess-panel rounded-xl p-6">
           <h2 className="text-xl font-bold text-chess-gold mb-1">Reflect on This Game</h2>

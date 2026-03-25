@@ -75,7 +75,7 @@ export default function MentalTutorStats({ userId }) {
 
   if (!stats || stats.total_sessions === 0) {
     return (
-      <div className="min-h-screen bg-chess-dark p-6">
+      <div className="min-h-screen bg-chess-dark p-3 sm:p-6">
         <div className="max-w-4xl mx-auto">
           <div className="flex items-center gap-4 mb-6">
             <button onClick={() => navigate('/mental-tutor')} className="flex items-center gap-1 text-slate-400 hover:text-white text-sm">
@@ -130,7 +130,7 @@ export default function MentalTutorStats({ userId }) {
   const changeColor = avg_eval_change >= 0 ? 'text-green-400' : 'text-red-400'
 
   return (
-    <div className="min-h-screen bg-chess-dark p-6">
+    <div className="min-h-screen bg-chess-dark p-3 sm:p-6">
       <div className="max-w-4xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center gap-4">
@@ -143,7 +143,7 @@ export default function MentalTutorStats({ userId }) {
         </div>
 
         {/* Overview cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <StatCard label="Sessions" value={total_sessions} />
           <StatCard label="Conversion Rate" value={`${conversion_rate}%`} color={convColor} />
           <StatCard
@@ -163,7 +163,7 @@ export default function MentalTutorStats({ userId }) {
         {/* Results breakdown */}
         <div className="bg-chess-panel rounded-xl p-5">
           <h2 className="text-chess-gold font-semibold mb-4">Session Results</h2>
-          <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-3 sm:grid-cols-3 gap-3 mb-4">
             {Object.entries(results_breakdown || {}).map(([key, count]) => {
               const meta = RESULT_META[key] || { label: key, color: '#64748b' }
               const Icon = key === 'converted' ? CheckCircle : key === 'failed' ? XCircle : MinusCircle
@@ -205,7 +205,7 @@ export default function MentalTutorStats({ userId }) {
               </span>
             </div>
           )}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
             {Object.entries(mental_error_counts || {}).map(([key, count]) => {
               const meta = ERROR_META[key] || { label: key, color: '#64748b', icon: AlertTriangle }
               const Icon = meta.icon
@@ -308,7 +308,7 @@ export default function MentalTutorStats({ userId }) {
             <button
               onClick={handleCoaching}
               disabled={coachLoading}
-              className="text-sm border border-chess-gold text-chess-gold px-4 py-1.5 rounded-lg hover:bg-chess-gold/10 disabled:opacity-50 transition-colors"
+              className="text-sm border border-chess-gold text-chess-gold px-4 py-2 rounded-lg hover:bg-chess-gold/10 disabled:opacity-50 transition-colors"
             >
               {coachLoading ? 'Analysing…' : coaching ? 'Refresh' : 'Analyse'}
             </button>

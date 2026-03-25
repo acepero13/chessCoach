@@ -111,19 +111,21 @@ function WeekCard({ week }) {
 
       {open && (
         <div className="border-t border-slate-700">
-          {/* Compact calendar grid */}
-          <div className="grid grid-cols-7 divide-x divide-slate-800 border-b border-slate-700">
-            {week.daily_sessions.map(session => (
-              <button
-                key={session.day}
-                onClick={() => setDayDetail(d => d === session.day ? null : session.day)}
-                className={`text-left transition-colors ${
-                  dayDetail === session.day ? 'bg-chess-accent/30' : 'hover:bg-chess-accent/10'
-                }`}
-              >
-                <DayColumn session={session} />
-              </button>
-            ))}
+          {/* Compact calendar grid — horizontal scroll on mobile */}
+          <div className="overflow-x-auto border-b border-slate-700">
+            <div className="grid grid-cols-7 divide-x divide-slate-800 min-w-[560px]">
+              {week.daily_sessions.map(session => (
+                <button
+                  key={session.day}
+                  onClick={() => setDayDetail(d => d === session.day ? null : session.day)}
+                  className={`text-left transition-colors ${
+                    dayDetail === session.day ? 'bg-chess-accent/30' : 'hover:bg-chess-accent/10'
+                  }`}
+                >
+                  <DayColumn session={session} />
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Expanded day detail */}
@@ -201,7 +203,7 @@ export default function TrainingPlan({ userId }) {
   }
 
   return (
-    <div className="min-h-screen bg-chess-dark p-6">
+    <div className="min-h-screen bg-chess-dark p-3 sm:p-6">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-4 mb-6">

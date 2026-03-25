@@ -66,7 +66,7 @@ export default function AnnotatingPhase({
   const isUserMove = currentMove?.is_user_move ?? false
 
   return (
-    <div className="min-h-screen bg-chess-dark p-4">
+    <div className="min-h-screen bg-chess-dark p-3 sm:p-4">
       <div className="max-w-5xl mx-auto">
 
         {/* Top bar */}
@@ -198,43 +198,43 @@ export default function AnnotatingPhase({
               />
             )}
 
-            {/* Eval display — shown for every move when Best Lines is active */}
-            {showEngineArrows && currentMove && (
-              <div className="mt-1 flex items-center justify-center gap-1.5 text-xs font-mono">
+            {/* Eval + move info + classification — always reserve space to prevent layout shift */}
+            <div className="mt-1 h-14 flex flex-col items-center justify-center gap-0.5">
+              {/* Eval row */}
+              <div className={`flex items-center gap-1.5 text-xs font-mono transition-opacity ${showEngineArrows && currentMove ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
                 <span className="text-slate-500">Eval:</span>
-                <span className={toWhitePov(currentReveal?.engine_eval_before ?? currentMove.eval_before, currentMove.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
-                  {fmtEval(toWhitePov(currentReveal?.engine_eval_before ?? currentMove.eval_before, currentMove.color))}
-                </span>
-                <span className="text-slate-600">→</span>
-                <span className={toWhitePov(currentReveal?.engine_eval_after ?? currentMove.eval_after, currentMove.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
-                  {fmtEval(toWhitePov(currentReveal?.engine_eval_after ?? currentMove.eval_after, currentMove.color))}
-                </span>
+                {currentMove && (
+                  <>
+                    <span className={toWhitePov(currentReveal?.engine_eval_before ?? currentMove.eval_before, currentMove.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(toWhitePov(currentReveal?.engine_eval_before ?? currentMove.eval_before, currentMove.color))}
+                    </span>
+                    <span className="text-slate-600">→</span>
+                    <span className={toWhitePov(currentReveal?.engine_eval_after ?? currentMove.eval_after, currentMove.color) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {fmtEval(toWhitePov(currentReveal?.engine_eval_after ?? currentMove.eval_after, currentMove.color))}
+                    </span>
+                  </>
+                )}
               </div>
-            )}
-
-            {/* Move info */}
-            {currentMove && (
-              <div className="mt-1.5 text-center text-xs text-slate-400">
-                Move {currentMove.move_number} ·{' '}
-                <span className={`font-mono font-semibold ${
-                  isUserMove ? 'text-chess-gold' : 'text-slate-300'
-                }`}>
-                  {currentMove.move_san}
-                </span>
-                {' '}·{' '}
-                <span className="capitalize">{currentMove.color}</span>
+              {/* Move info */}
+              {currentMove && (
+                <div className="text-center text-xs text-slate-400">
+                  Move {currentMove.move_number} ·{' '}
+                  <span className={`font-mono font-semibold ${isUserMove ? 'text-chess-gold' : 'text-slate-300'}`}>
+                    {currentMove.move_san}
+                  </span>
+                  {' '}· <span className="capitalize">{currentMove.color}</span>
+                </div>
+              )}
+              {/* Classification badge — invisible when no reveal */}
+              <div className={`transition-opacity ${currentReveal ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                {currentReveal && (
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded border ${classificationBg(currentReveal.classification)} ${classificationClass(currentReveal.classification)}`}>
+                    {currentReveal.classification}
+                    {currentReveal.centipawn_loss > 0 && ` · ${Math.round(currentReveal.centipawn_loss)} cp`}
+                  </span>
+                )}
               </div>
-            )}
-
-            {/* Classification badge — only after reveal */}
-            {currentReveal && (
-              <div className="mt-1 text-center">
-                <span className={`text-xs font-medium px-2 py-0.5 rounded border ${classificationBg(currentReveal.classification)} ${classificationClass(currentReveal.classification)}`}>
-                  {currentReveal.classification}
-                  {currentReveal.centipawn_loss > 0 && ` · ${Math.round(currentReveal.centipawn_loss)} cp`}
-                </span>
-              </div>
-            )}
+            </div>
 
             {/* Navigation controls */}
             <div className="flex items-center justify-center gap-2 mt-3">
@@ -267,7 +267,7 @@ export default function AnnotatingPhase({
           </div>
 
           {/* ── Right: Annotation / Reveal / Opponent panel ── */}
-          <div className="flex flex-col gap-4 min-w-0">
+          <div className="flex flex-col gap-4 min-w-0 min-h-[120px]">
             {/* Opponent move panel */}
             {currentMove && !isUserMove && (
               <div className="bg-chess-panel rounded-xl p-4 text-center">

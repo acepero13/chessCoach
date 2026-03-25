@@ -47,7 +47,7 @@ if lsof -i :"$FRONTEND_PORT" >/dev/null 2>&1; then
     echo "⚠️  Frontend already running on port $FRONTEND_PORT, skipping..."
 else
     echo "🎨 Starting Frontend on http://localhost:$FRONTEND_PORT"
-    VITE_API_URL="http://localhost:$BACKEND_PORT" npm run dev &
+    VITE_API_URL="http://192.168.2.115:$BACKEND_PORT" npm run dev &
     FRONTEND_PID=$!
 fi
 

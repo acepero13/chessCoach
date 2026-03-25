@@ -115,7 +115,7 @@ export default function CoachReviewPhase({
   const isLast  = reviewIdx === items.length - 1
 
   return (
-    <div className="min-h-screen bg-chess-dark p-4">
+    <div className="min-h-screen bg-chess-dark p-3 sm:p-4">
       <div className="max-w-5xl mx-auto">
 
         {/* Top bar */}
@@ -390,7 +390,7 @@ export default function CoachReviewPhase({
             </div>
 
             {/* Chat panel */}
-            <div className="bg-chess-panel rounded-xl flex flex-col" style={{ minHeight: '220px', maxHeight: '420px' }}>
+            <div className="bg-chess-panel rounded-xl flex flex-col" style={{ minHeight: '160px', maxHeight: '420px' }}>
               <div className="flex items-center gap-2 px-4 pt-3 pb-2 border-b border-slate-700">
                 <MessageSquare size={14} className="text-chess-gold" />
                 <span className="text-xs font-semibold text-chess-gold uppercase tracking-wide">Ask the coach</span>
