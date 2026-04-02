@@ -12,6 +12,7 @@ import MentalTutorStats from './pages/MentalTutorStats'
 import Drills from './pages/Drills'
 import Review from './pages/Review'
 import EndgameAnalysis from './pages/EndgameAnalysis'
+import PuzzleTrainer from './pages/PuzzleTrainer'
 
 export default function App() {
   const [userId, setUserIdState] = useState(() => {
@@ -85,6 +86,10 @@ export default function App() {
         <Route
           path="/endgame"
           element={<EndgameAnalysis userId={userId} />}
+        />
+        <Route
+          path="/puzzles"
+          element={<PuzzleTrainer userId={userId} />}
         />
       </Routes>
     </BrowserRouter>

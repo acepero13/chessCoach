@@ -275,6 +275,7 @@ export default function Dashboard({ userId, username, setUser }) {
               { label: 'Calculation Drills', onClick: () => navigate('/drills') },
               { label: 'Spaced Review', onClick: () => navigate('/review') },
               { label: 'Endgame Analysis', onClick: () => navigate('/endgame') },
+              { label: 'Puzzle Trainer', onClick: () => navigate('/puzzles') },
             ]} />
             <StatsCard navigate={navigate} />
           </div>
@@ -551,6 +552,13 @@ function StatsCard({ navigate }) {
         className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
       >
         <span>Mental Tutor</span>
+        <ChevronRight size={11} className="text-slate-600 group-hover:text-chess-gold transition-colors flex-shrink-0 ml-1" />
+      </button>
+      <button
+        onClick={() => navigate('/puzzles')}
+        className="flex items-center justify-between text-xs text-slate-300 hover:text-chess-gold px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-lg hover:bg-chess-accent/40 transition-colors group"
+      >
+        <span>Puzzle Trainer</span>
         <ChevronRight size={11} className="text-slate-600 group-hover:text-chess-gold transition-colors flex-shrink-0 ml-1" />
       </button>
     </div>

@@ -2,13 +2,13 @@
 Training plan endpoints.
 """
 import json
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
+from sqlalchemy import select, func, Integer as SAInteger, cast as sa_cast
 from app.database import get_db
-from app.models import PerformanceProfile, TrainingPlan, Game, GameAnalysis
+from app.models import PerformanceProfile, TrainingPlan, Game, GameAnalysis, PuzzleAttempt, PuzzleProgress, Puzzle
 from app.training.plan_generator import generate_training_plan, plan_to_dict
 from app.llm.explainer import generate_batch_summary, stream_batch_summary
 from app.llm.coach_memory import get_or_create_memory
@@ -59,7 +59,63 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass  # non-critical — plan still works without it
 
-    plan = generate_training_plan(profile_dict, raw_metrics=profile.raw_metrics or {}, endgame_profile=endgame_profile)
+    # Build puzzle stats for the plan generator
+    puzzle_stats: dict | None = None
+    try:
+        now = datetime.now(timezone.utc)
+
+        # Per-motif attempt accuracy (keyed by puzzle's actual motif)
+        motif_rows = await db.execute(
+            select(
+                Puzzle.motif,
+                func.count(PuzzleAttempt.id).label("attempts"),
+                func.sum(sa_cast(PuzzleAttempt.solved, SAInteger)).label("correct"),
+            )
+            .join(Puzzle, Puzzle.id == PuzzleAttempt.puzzle_id)
+            .where(
+                PuzzleAttempt.user_id == user_id,
+                Puzzle.motif.isnot(None),
+            )
+            .group_by(Puzzle.motif)
+        )
+        motif_accuracy: dict[str, float] = {}
+        motif_attempts: dict[str, int] = {}
+        for row in motif_rows.all():
+            motif = row[0]
+            attempts = row[1] or 0
+            correct = row[2] or 0
+            if motif and attempts > 0:
+                motif_accuracy[motif] = correct / attempts
+                motif_attempts[motif] = attempts
+
+        # Recommended motif: lowest accuracy with ≥5 attempts; fallback to most attempts
+        ranked = sorted(
+            [(m, acc) for m, acc in motif_accuracy.items() if motif_attempts.get(m, 0) >= 5],
+            key=lambda x: x[1],
+        )
+        recommended_motif = ranked[0][0] if ranked else (
+            max(motif_attempts, key=motif_attempts.get) if motif_attempts else None
+        )
+
+        # Due puzzles count
+        due_result = await db.execute(
+            select(func.count(PuzzleProgress.id)).where(
+                PuzzleProgress.user_id == user_id,
+                PuzzleProgress.next_review_at <= now,
+            )
+        )
+        due_count = due_result.scalar() or 0
+
+        puzzle_stats = {
+            "motif_accuracy": motif_accuracy,
+            "motif_attempts": motif_attempts,
+            "recommended_motif": recommended_motif,
+            "due_count": due_count,
+        }
+    except Exception:
+        pass  # non-critical — plan still works without puzzle stats
+
+    plan = generate_training_plan(profile_dict, raw_metrics=profile.raw_metrics or {}, endgame_profile=endgame_profile, puzzle_stats=puzzle_stats)
     plan_dict = plan_to_dict(plan)
 
     # Save plan
@@ -82,16 +138,32 @@ async def generate_plan(user_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/{user_id}/latest-plan")
 async def get_latest_plan(user_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
+    plan_result = await db.execute(
         select(TrainingPlan)
         .where(TrainingPlan.user_id == user_id)
         .order_by(TrainingPlan.created_at.desc())
         .limit(1)
     )
-    plan = result.scalar_one_or_none()
+    plan = plan_result.scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="No training plan found.")
-    return {"plan_id": plan.id, "plan": plan.plan_data, "created_at": plan.created_at}
+
+    # Check if plan is stale (profile updated after plan was generated)
+    profile_result = await db.execute(
+        select(PerformanceProfile)
+        .where(PerformanceProfile.user_id == user_id)
+        .order_by(PerformanceProfile.created_at.desc())
+        .limit(1)
+    )
+    profile = profile_result.scalar_one_or_none()
+    stale = profile is not None and profile.created_at > plan.created_at
+
+    return {
+        "plan_id": plan.id,
+        "plan": plan.plan_data,
+        "created_at": plan.created_at,
+        "stale": stale,
+    }
 
 
 @router.post("/{user_id}/summary")

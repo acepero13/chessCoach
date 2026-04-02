@@ -138,8 +138,8 @@ def _move_creates_pin(board: chess.Board, move: chess.Move) -> bool:
 
     for piece_type in (chess.BISHOP, chess.ROOK, chess.QUEEN):
         for slider_sq in test.pieces(piece_type, color):
-            for queen_sq in chess.scan_forward(opponent_queens):
-                between = chess.BB_BETWEEN[slider_sq][queen_sq]
+            for queen_sq in opponent_queens:  # SquareSet is directly iterable
+                between = chess.between(slider_sq, queen_sq)  # int bitboard
                 if not between:
                     continue  # not aligned (different rank/file/diagonal)
 
@@ -184,9 +184,10 @@ def _move_creates_discovered_attack(board: chess.Board, move: chess.Move) -> boo
             # Attacks before and after the move for this slider
             attacks_before = board.attacks(slider_sq)
             attacks_after  = test.attacks(slider_sq)
-            newly_attacked  = attacks_after & ~attacks_before
+            # attacks() returns SquareSet — XOR to find newly attacked squares
+            newly_attacked = attacks_after - attacks_before  # SquareSet difference
 
-            for sq in chess.scan_forward(newly_attacked):
+            for sq in newly_attacked:
                 piece = test.piece_at(sq)
                 if piece and piece.color != color and piece.piece_type in _VALUABLE:
                     return True

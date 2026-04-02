@@ -31,6 +31,13 @@ async def _get_or_create_user(username: str, db: AsyncSession) -> User:
     return user
 
 
+def _safe_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (ValueError, TypeError):
+        return 0
+
+
 def _parse_pgn_headers(pgn_text: str) -> dict:
     """Extract key headers from a PGN string."""
     game = chess.pgn.read_game(io.StringIO(pgn_text))
@@ -40,8 +47,8 @@ def _parse_pgn_headers(pgn_text: str) -> dict:
     return {
         "white": headers.get("White", ""),
         "black": headers.get("Black", ""),
-        "white_elo": int(headers.get("WhiteElo", 0) or 0),
-        "black_elo": int(headers.get("BlackElo", 0) or 0),
+        "white_elo": _safe_int(headers.get("WhiteElo")),
+        "black_elo": _safe_int(headers.get("BlackElo")),
         "result": headers.get("Result", "*"),
         "eco": headers.get("ECO", ""),
         "opening": headers.get("Opening", ""),

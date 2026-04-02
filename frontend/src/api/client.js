@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
+  baseURL: import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000`,
   timeout: 180000,   // 3 min — engine (depth 20) + LLM (40 s timeout) + margin
 })
 
@@ -211,3 +211,42 @@ export const resetDatabase = () =>
 // Endgame
 export const getEndgameProfile = (userId) =>
   api.get(`/endgame/${userId}/profile`)
+
+// Puzzles
+export const getPuzzleImportStatus = () => api.get('/puzzles/import-status')
+export const startPuzzleImport = (filename) =>
+  api.post(`/puzzles/import?filename=${encodeURIComponent(filename)}`)
+export const getPuzzleBooks = () => api.get('/puzzles/books')
+export const getPuzzleSession = (userId, { n = 20, mode = 'review', tier, source, motif } = {}) => {
+  const params = { n, mode }
+  if (tier) params.tier = tier
+  if (source) params.source = source
+  if (motif) params.motif = motif
+  return api.get(`/puzzles/session/${userId}`, { params })
+}
+export const recordPuzzleAttempt = (userId, puzzleId, { solved, solve_time, motif_guess } = {}) =>
+  api.post('/puzzles/attempt', null, { params: { user_id: userId, puzzle_id: puzzleId, solved, solve_time, motif_guess } })
+export const getPuzzleStats = (userId) => api.get(`/puzzles/stats/${userId}`)
+export const getPuzzleRecommendation = (userId) => api.get(`/puzzles/recommendation/${userId}`)
+
+// Board analysis
+export const analyzePosition = (fen, depth = 16) =>
+  api.post('/board/analyze', { fen, depth })
+
+export const analyzePositionMulti = (fen, depth = 16, numLines = 3) =>
+  api.post('/board/analyze-multi', { fen, depth, num_lines: numLines })
+
+export const getGauntletCoach = (fen, userMoveSan, bestMoveSan, topLines = [], userNote = '') =>
+  api.post('/puzzles/gauntlet-coach', {
+    fen,
+    user_move_san: userMoveSan,
+    best_move_san: bestMoveSan,
+    top_lines: topLines,
+    user_note: userNote,
+  })
+
+export const getPersonalPuzzles = (userId, limit = 30) =>
+  api.get(`/puzzles/personal/${userId}`, { params: { limit } })
+
+export const getTrainingModeRecommendation = (userId) =>
+  api.get(`/puzzles/training-recommendation/${userId}`)

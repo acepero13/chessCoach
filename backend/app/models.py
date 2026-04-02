@@ -235,3 +235,47 @@ class ReviewCard(Base):
     last_reviewed_at = Column(DateTime)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Puzzle(Base):
+    __tablename__ = "puzzles"
+    id = Column(Integer, primary_key=True)
+    source = Column(String(100), nullable=False)
+    fen = Column(Text, nullable=False, unique=True)
+    title = Column(String(200))
+    best_move_uci = Column(String(10))       # None until engine analyzed
+    best_move_san = Column(String(20))
+    solution_path = Column(JSON)             # Full PV as list of UCI strings, e.g. ["e2e4","e7e5","d2d4"]
+    motif = Column(String(40))               # fork, pin, discovered_attack, checkmate, hanging_piece, sacrifice, combination, check
+    difficulty_tier = Column(Integer, default=1)  # 1=easy, 2=medium, 3=hard
+    total_attempts = Column(Integer, default=0)
+    total_correct = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PuzzleProgress(Base):
+    __tablename__ = "puzzle_progress"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    puzzle_id = Column(Integer, ForeignKey("puzzles.id"), nullable=False)
+    next_review_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    interval_days = Column(Float, default=0)
+    ease_factor = Column(Float, default=2.5)
+    repetition_count = Column(Integer, default=0)
+    attempts = Column(Integer, default=0)
+    correct = Column(Integer, default=0)
+    last_solve_time = Column(Float)
+    confidence = Column(String(10))          # "high", "medium", "none"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PuzzleAttempt(Base):
+    __tablename__ = "puzzle_attempts"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    puzzle_id = Column(Integer, ForeignKey("puzzles.id"), nullable=False)
+    solved = Column(Boolean, nullable=False)
+    solve_time = Column(Float, nullable=False)
+    motif_guess = Column(String(40))
+    motif_correct = Column(Boolean)
+    created_at = Column(DateTime, default=datetime.utcnow)

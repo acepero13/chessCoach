@@ -1561,3 +1561,38 @@ async def stream_endgame_coaching(profile: dict):
 
     async for chunk in _stream_ollama(prompt, num_predict=500, timeout=LLM_TIMEOUT_LONG):
         yield chunk
+
+
+async def explain_gauntlet_defense(
+    fen: str,
+    user_move_san: str,
+    best_move_san: str,
+    top_lines: list[dict],
+    user_note: str = "",
+) -> str:
+    """
+    Explain why best_move_san is the strongest defensive resource and what
+    the student's attempt (user_move_san) missed.  Called by the Gauntlet coach.
+    """
+    lines_text = "\n".join(
+        f"{l.get('rank', i + 1)}. {l['move_san']} "
+        f"({l.get('score_cp', 0) / 100:.1f}) — {' '.join((l.get('pv_san') or [])[:4])}"
+        for i, l in enumerate((top_lines or [])[:3])
+    )
+    user_note_part = f'\nThe student writes: "{user_note}"' if (user_note or "").strip() else ""
+
+    prompt = (
+        f"Chess position (FEN): {fen}\n"
+        f"Student's move: {user_move_san}\n"
+        f"Engine best response: {best_move_san}\n"
+        f"Top engine lines:\n{lines_text}"
+        f"{user_note_part}\n\n"
+        f"In 2–3 sentences: explain why {best_move_san} is the best defensive reply, "
+        f"what tactical or strategic idea it achieves, and what the student's move missed. "
+        f"Mention one defensive principle. Be concrete; reference the engine lines above."
+    )
+    result = await _call_ollama(prompt, num_predict=220, timeout=LLM_TIMEOUT_LONG)
+    return result or (
+        f"The best defensive response was {best_move_san}. "
+        f"Study the engine lines above to understand the key idea."
+    )

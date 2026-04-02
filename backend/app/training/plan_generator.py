@@ -5,6 +5,7 @@ Fully derived from the performance profile and raw metrics — no randomness.
 Every task names the exact resource (Lichess theme, book chapter, tool) and
 what to do, so the player never has to guess.
 """
+from __future__ import annotations
 from dataclasses import dataclass
 
 
@@ -84,11 +85,11 @@ ENDGAME_POOL = [
         ),
     ),
     Task(
-        label="Lichess puzzles: Endgame theme — 15 puzzles",
+        label="Puzzle Trainer: Endgame theme — 15 puzzles",
         duration_min=15,
         category="endgame",
         instructions=(
-            "lichess.org/training → Themes → Endgame. "
+            "Puzzle Trainer → motif filter: Endgame. "
             "After each wrong answer, spend 60 seconds understanding why the solution works before moving on. "
             "Track how many you solve on the first attempt — your target is 70%+."
         ),
@@ -139,11 +140,11 @@ ROOK_ENDGAME_POOL = [
         ),
     ),
     Task(
-        label="Lichess puzzles: Rook Endgame theme — 15 puzzles",
+        label="Puzzle Trainer: Rook Endgame theme — 15 puzzles",
         duration_min=15,
         category="endgame",
         instructions=(
-            "lichess.org/training → Themes → RookEndgame. "
+            "Puzzle Trainer → motif filter: RookEndgame. "
             "After each puzzle: identify whether it was a Lucena-type (winning) or Philidor-type (saving). "
             "This is the most critical endgame category to master."
         ),
@@ -182,11 +183,11 @@ KING_PAWN_POOL = [
         ),
     ),
     Task(
-        label="Lichess puzzles: Pawn Endgame theme — 15 puzzles",
+        label="Puzzle Trainer: Pawn Endgame theme — 15 puzzles",
         duration_min=15,
         category="endgame",
         instructions=(
-            "lichess.org/training → Themes → PawnEndgame. "
+            "Puzzle Trainer → motif filter: PawnEndgame. "
             "Before each puzzle, ask: which side has the opposition? Who wins the pawn race? "
             "These two questions resolve most pawn endings."
         ),
@@ -232,21 +233,21 @@ ENDGAME_COLLAPSE_TASK = Task(
 
 PIN_POOL = [
     Task(
-        label="Lichess puzzles: Pin theme — 20 puzzles",
+        label="Puzzle Trainer: Pin theme — 20 puzzles",
         duration_min=15,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Pin. "
+            "Puzzle Trainer → motif filter: Pin. "
             "Before solving, identify: (a) which piece is pinned, (b) what it is pinned against. "
             "If you solve it in under 10 s, note that you recognised the pattern — good sign."
         ),
     ),
     Task(
-        label="Lichess puzzles: Skewer theme — 15 puzzles",
+        label="Puzzle Trainer: Skewer theme — 15 puzzles",
         duration_min=12,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Skewer. "
+            "Puzzle Trainer → motif filter: Skewer. "
             "Skewers are reverse pins: the valuable piece is in front. "
             "After each puzzle, ask: could I have set up this tactic in my games?"
         ),
@@ -255,21 +256,21 @@ PIN_POOL = [
 
 FORK_POOL = [
     Task(
-        label="Lichess puzzles: Fork theme — 20 puzzles",
+        label="Puzzle Trainer: Fork theme — 20 puzzles",
         duration_min=15,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Fork. "
+            "Puzzle Trainer → motif filter: Fork. "
             "Focus on knight forks (most common) but also bishop and pawn double-attacks. "
             "Before each move, scan ALL squares your knight could jump to."
         ),
     ),
     Task(
-        label="Lichess puzzles: Double Attack theme — 15 puzzles",
+        label="Puzzle Trainer: Double Attack theme — 15 puzzles",
         duration_min=12,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → DoubleCheck or Knight. "
+            "Puzzle Trainer → motif filter: DoubleCheck or Knight. "
             "A fork is a double-attack — practice spotting undefended pieces before calculating. "
             "Aim for 80% accuracy."
         ),
@@ -278,11 +279,11 @@ FORK_POOL = [
 
 HANGING_POOL = [
     Task(
-        label="Lichess puzzles: Hanging Piece theme — 20 puzzles",
+        label="Puzzle Trainer: Hanging Piece theme — 20 puzzles",
         duration_min=12,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → HangingPiece. "
+            "Puzzle Trainer → motif filter: HangingPiece. "
             "Rule: before every move in your games, scan all opponent pieces and ask 'is anything undefended?' "
             "This drill builds that habit."
         ),
@@ -291,21 +292,21 @@ HANGING_POOL = [
 
 MATE_POOL = [
     Task(
-        label="Lichess puzzles: Checkmate Patterns — 20 puzzles (mate in 1–3)",
+        label="Puzzle Trainer: Checkmate Patterns — 20 puzzles (mate in 1–3)",
         duration_min=15,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Mate. "
+            "Puzzle Trainer → motif filter: Mate. "
             "Focus on back-rank mates, smothered mates, and queen+knight mates first — "
             "they are the most common patterns at club level."
         ),
     ),
     Task(
-        label="Lichess puzzles: Back Rank Mate theme — 15 puzzles",
+        label="Puzzle Trainer: Back Rank Mate theme — 15 puzzles",
         duration_min=12,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → BackRankMate. "
+            "Puzzle Trainer → motif filter: BackRankMate. "
             "After each puzzle, check: in my own games, is my back rank defended? "
             "Make it a habit to ask this every 5 moves."
         ),
@@ -314,11 +315,11 @@ MATE_POOL = [
 
 DEFENSE_POOL = [
     Task(
-        label="Lichess puzzles: Defense theme — 15 puzzles",
+        label="Puzzle Trainer: Defense theme — 15 puzzles",
         duration_min=15,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Defense. "
+            "Puzzle Trainer → motif filter: Defense. "
             "These positions require finding the only saving move under attack. "
             "Practice the habit: 'what is my opponent threatening right now?'"
         ),
@@ -338,11 +339,11 @@ GENERIC_TACTICS_POOL = [
         ),
     ),
     Task(
-        label="Lichess puzzles: Mixed — 20 puzzles (no hints)",
+        label="Puzzle Trainer: Mixed — 20 puzzles (no hints)",
         duration_min=15,
         category="tactics",
         instructions=(
-            "lichess.org/training → no theme filter. "
+            "Puzzle Trainer (no motif filter). "
             "Disable hints and move suggestions. "
             "After each wrong answer, write one sentence explaining what you missed."
         ),
@@ -353,11 +354,11 @@ GENERIC_TACTICS_POOL = [
 
 PAWN_STRUCTURE_POOL = [
     Task(
-        label="Lichess puzzles: Isolated Pawn / Pawn Endgame themes — 15 puzzles",
+        label="Puzzle Trainer: Isolated Pawn / Pawn Endgame themes — 15 puzzles",
         duration_min=15,
         category="strategy",
         instructions=(
-            "lichess.org/training → Themes → IsolatedPawn or PawnEndgame. "
+            "Puzzle Trainer → motif filter: IsolatedPawn or PawnEndgame. "
             "Ask after each: did the pawn structure determine the result? How?"
         ),
     ),
@@ -375,12 +376,13 @@ PAWN_STRUCTURE_POOL = [
 
 WEAK_SQUARES_POOL = [
     Task(
-        label="Lichess puzzles: Outpost / Weak Square theme — 15 puzzles",
+        label="Puzzle Trainer (Ghost Square mode): Outpost / Weak Square — 15 puzzles",
         duration_min=15,
         category="strategy",
         instructions=(
-            "lichess.org/training → Themes → Outpost. "
+            "Open Puzzle Trainer → enable 'Ghost Square'. "
             "Before each puzzle, identify all weak squares (squares your opponent cannot defend with pawns). "
+            "Ghost Square forces you to declare every piece your move attacks — builds attack awareness. "
             "A knight on an outpost can decide games single-handedly."
         ),
     ),
@@ -398,12 +400,14 @@ PROPHYLAXIS_POOL = [
         ),
     ),
     Task(
-        label="Lichess puzzles: Quiet Move / Prophylaxis theme — 10 puzzles",
+        label="Puzzle Trainer (Ghost Square mode): Quiet Move / Prophylaxis — 10 puzzles",
         duration_min=15,
         category="strategy",
         instructions=(
-            "lichess.org/training → Themes → QuietMove. "
+            "Open Puzzle Trainer → enable 'Ghost Square'. "
+            "Puzzle Trainer → motif filter: QuietMove. "
             "These puzzles have no captures — purely positional. "
+            "Ghost Square: before moving, click all pieces your move threatens. "
             "Spend 3+ minutes on each; the answer requires seeing the opponent's future threat."
         ),
     ),
@@ -422,11 +426,11 @@ BVN_POOL = [
         ),
     ),
     Task(
-        label="Lichess puzzles: Bishop vs Knight — 10 strategic positions",
+        label="Puzzle Trainer: Bishop vs Knight — 10 strategic positions",
         duration_min=15,
         category="strategy",
         instructions=(
-            "Search lichess.org/training for 'Bishop' or 'Knight' theme. "
+            "Puzzle Trainer → filter by 'Bishop' or 'Knight' theme. "
             "For each position: before solving, decide if the position is open or closed, "
             "then decide which piece is better. Check if your assessment was right."
         ),
@@ -435,11 +439,11 @@ BVN_POOL = [
 
 DRIFT_POOL = [
     Task(
-        label="Lichess puzzles: Quiet Move / Strategic theme — 10 puzzles",
+        label="Puzzle Trainer: Quiet Move / Strategic theme — 10 puzzles",
         duration_min=15,
         category="strategy",
         instructions=(
-            "lichess.org/training → Themes → QuietMove. "
+            "Puzzle Trainer → motif filter: QuietMove. "
             "These require long-range thinking. Rule for your games: "
             "every 5 moves, stop and write (mentally) your next 3-move plan."
         ),
@@ -470,11 +474,11 @@ OPENING_POOL = [
         ),
     ),
     Task(
-        label="Lichess puzzles: Opening theme — 10 puzzles",
+        label="Puzzle Trainer: Opening theme — 10 puzzles",
         duration_min=12,
         category="opening",
         instructions=(
-            "lichess.org/training → Themes → Opening. "
+            "Puzzle Trainer → motif filter: Opening. "
             "These are tactics that arise directly from opening mistakes. "
             "Know these patterns so you can punish your opponent's early errors."
         ),
@@ -562,13 +566,14 @@ MENTAL_POOL = [
         ),
     ),
     Task(
-        label="Lichess puzzles (25 mixed) — no take-backs, no hints",
+        label="Puzzle Trainer (Gauntlet mode): 25 mixed puzzles — commit, no take-backs",
         duration_min=20,
         category="tactics",
         instructions=(
-            "lichess.org/training, puzzle mode with hints off. "
+            "Open Puzzle Trainer → enable 'Defensive Gauntlet'. "
             "Rule: commit to every move. Do not 'trial-and-error'. "
-            "This trains deliberate decision-making — the same discipline needed when you're losing."
+            "After each correct move the board flips — find the best defensive reply before continuing. "
+            "This trains deliberate decision-making on both sides of the board."
         ),
     ),
 ]
@@ -577,21 +582,23 @@ MENTAL_POOL = [
 
 DEFENSE_DRILL_POOL = [
     Task(
-        label="Lichess puzzles: Defense theme — 20 puzzles (only-moves under attack)",
+        label="Puzzle Trainer (Gauntlet mode): Defense theme — 20 puzzles",
         duration_min=20,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Defense. "
+            "Open Puzzle Trainer → enable 'Defensive Gauntlet'. "
             "Before each puzzle: identify every threat. List them. Then find the defense. "
-            "Building the habit: 'what is my opponent threatening?' before every reply."
+            "After your correct move the board flips — you must also find the best defensive reply. "
+            "This double-sided training builds the 'what is my opponent threatening?' habit."
         ),
     ),
     Task(
-        label="Lichess puzzles: Defensive Move / Desperado theme — 15 puzzles",
+        label="Puzzle Trainer (Gauntlet mode): Defensive Move — 15 puzzles",
         duration_min=15,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Desperado. "
+            "Open Puzzle Trainer → enable 'Defensive Gauntlet'. "
+            "Puzzle Trainer → motif filter: Desperado. "
             "These feature sacrificing a lost piece for maximum damage — "
             "recognise when your opponent has this resource so you don't walk into it."
         ),
@@ -602,26 +609,92 @@ DEFENSE_DRILL_POOL = [
 
 ATTACK_POOL = [
     Task(
-        label="Lichess puzzles: Attack theme — 20 puzzles",
+        label="Puzzle Trainer: Attack theme — 20 puzzles",
         duration_min=15,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Attack. "
+            "Puzzle Trainer → motif filter: Attack. "
             "Before each puzzle, identify the weakest square around the enemy king. "
             "Successful attacks usually target one square repeatedly."
         ),
     ),
     Task(
-        label="Lichess puzzles: Sacrifice theme — 15 puzzles",
+        label="Puzzle Trainer: Sacrifice theme — 15 puzzles",
         duration_min=15,
         category="tactics",
         instructions=(
-            "lichess.org/training → Themes → Sacrifice. "
+            "Puzzle Trainer → motif filter: Sacrifice. "
             "After each puzzle: what did the sacrifice gain? (open file, exposed king, tempo?) "
             "In your games: look for these patterns when the king has not castled."
         ),
     ),
 ]
+
+# ── In-app Puzzle Trainer tasks ──────────────────────────────────────────────
+
+_MOTIF_DISPLAY = {
+    "fork":             "Fork",
+    "pin":              "Pin",
+    "checkmate":        "Checkmate",
+    "hanging_piece":    "Hanging Piece",
+    "skewer":           "Skewer",
+    "discovered_attack": "Discovered Attack",
+    "sacrifice":        "Sacrifice",
+    "combination":      "Combination",
+}
+
+
+def _puzzle_trainer_task(motif: str, n: int, accuracy: float | None = None, mode: str | None = None) -> Task:
+    """Build an in-app Puzzle Trainer task for a specific motif.
+
+    mode: optional Puzzle Trainer mode to enable — 'blind', 'gauntlet', 'ghost', or None.
+    """
+    display = _MOTIF_DISPLAY.get(motif, motif.replace("_", " ").title())
+    acc_note = f"  Your current accuracy: {round(accuracy * 100)}%." if accuracy is not None else ""
+
+    mode_labels = {
+        "blind":    "Blind Recognition mode",
+        "gauntlet": "Gauntlet mode",
+        "ghost":    "Ghost Square mode",
+    }
+    mode_instructions = {
+        "blind": (
+            "Enable 'Blind Recognition' in the Puzzle Trainer. "
+            "You have 5 seconds to study the board, then identify the motif from 4 options before playing. "
+            "This trains chunking — recognising patterns at a glance."
+        ),
+        "gauntlet": (
+            "Enable 'Defensive Gauntlet' in the Puzzle Trainer. "
+            "After each correct move the board flips; you must find the best defensive reply before continuing. "
+            "Trains you to hold both sides of the position in your head."
+        ),
+        "ghost": (
+            "Enable 'Ghost Square' in the Puzzle Trainer. "
+            "Before moving, click the destination square and then every opponent piece your move attacks. "
+            "Builds attack-awareness — the habit of counting what your move threatens."
+        ),
+    }
+
+    mode_label = f" ({mode_labels[mode]})" if mode and mode in mode_labels else ""
+    mode_note = f"  {mode_instructions[mode]}" if mode and mode in mode_instructions else ""
+
+    return Task(
+        label=f"Puzzle Trainer{mode_label}: {display} focus — {n} puzzles",
+        duration_min=max(10, n),
+        category="tactics",
+        instructions=(
+            f"Open the Puzzle Trainer → motif filter: {display}.{acc_note}"
+            f"{mode_note} "
+            f"Solve {n} puzzles. After each failure, replay the full solution line before moving on. "
+            "The app tracks your progress automatically."
+        ),
+    )
+
+
+def _puzzle_trainer_warmup(motif: str, accuracy: float | None = None, mode: str | None = None) -> Task:
+    """10-puzzle in-app warmup for the given motif."""
+    return _puzzle_trainer_task(motif, n=10, accuracy=accuracy, mode=mode)
+
 
 # ── Games (standard) ─────────────────────────────────────────────────────────
 
@@ -683,7 +756,12 @@ def _identify_weaknesses(profile: dict) -> list[tuple[str, float]]:
     return sorted(scored, key=lambda x: x[1])
 
 
-def _pool_for(weakness: str, raw: dict, endgame_profile: dict | None = None) -> list[Task]:
+def _pool_for(
+    weakness: str,
+    raw: dict,
+    endgame_profile: dict | None = None,
+    puzzle_stats: dict | None = None,
+) -> list[Task]:
     """Return the ranked task pool for a weakness domain."""
     if weakness == "tactics":
         # Build a pool ordered by frequency of each missed pattern
@@ -703,6 +781,23 @@ def _pool_for(weakness: str, raw: dict, endgame_profile: dict | None = None) -> 
                 elif name == "mate": pool.extend(MATE_POOL)
         if not pool:
             pool = GENERIC_TACTICS_POOL[:]
+
+        # Prepend in-app puzzle trainer tasks for the weakest motif(s)
+        if puzzle_stats:
+            motif_acc = puzzle_stats.get("motif_accuracy", {})
+            motif_att = puzzle_stats.get("motif_attempts", {})
+            # Only include motifs with enough attempts; sort by accuracy ascending
+            ranked = sorted(
+                [(m, acc) for m, acc in motif_acc.items() if motif_att.get(m, 0) >= 5],
+                key=lambda x: x[1],
+            )
+            # Insert up to 3 in-app tasks at front of pool (Blind Recognition for pattern training)
+            for motif, acc in ranked[:3]:
+                pool.insert(0, _puzzle_trainer_task(motif, n=20, accuracy=acc, mode="blind"))
+            # If no ranked motifs but recommended_motif known, add a generic one
+            if not ranked and puzzle_stats.get("recommended_motif"):
+                pool.insert(0, _puzzle_trainer_task(puzzle_stats["recommended_motif"], n=20, mode="blind"))
+
         return pool
 
     if weakness == "strategy":
@@ -762,7 +857,7 @@ def _pool_for(weakness: str, raw: dict, endgame_profile: dict | None = None) -> 
     return GENERIC_TACTICS_POOL[:]
 
 
-def _warmup_for(primary: str, raw: dict) -> Task:
+def _warmup_for(primary: str, raw: dict, puzzle_stats: dict | None = None) -> Task:
     """Return a themed warmup task based on the primary weakness."""
     if primary in ("endgame", "conversion"):
         return Task(
@@ -775,34 +870,43 @@ def _warmup_for(primary: str, raw: dict) -> Task:
             ),
         )
     if primary == "tactics":
-        # Theme the warmup to the top missed pattern
+        # If puzzle stats available, use the in-app trainer for the recommended motif as warmup
+        if puzzle_stats:
+            rec = puzzle_stats.get("recommended_motif")
+            if rec:
+                motif_acc = puzzle_stats.get("motif_accuracy", {})
+                acc = motif_acc.get(rec)
+                return _puzzle_trainer_warmup(rec, accuracy=acc, mode="blind")
+
+        # Fallback: theme the warmup to the top missed pattern from game analysis
         top = max(
             [("pin", raw.get("missed_pins", 0)), ("fork", raw.get("missed_forks", 0)),
              ("hanging", raw.get("hanging_pieces_missed", 0)), ("mate", raw.get("missed_checkmates", 0))],
             key=lambda x: x[1],
         )
         theme_map = {
-            "pin":     ("Pin theme", "lichess.org/training → Themes → Pin. 10 quick puzzles."),
-            "fork":    ("Fork theme", "lichess.org/training → Themes → Fork. 10 quick puzzles."),
-            "hanging": ("HangingPiece theme", "lichess.org/training → Themes → HangingPiece. 10 quick puzzles."),
-            "mate":    ("Mate theme", "lichess.org/training → Themes → Mate. 10 quick puzzles."),
+            "pin":     ("Pin theme", "Puzzle Trainer → motif filter: Pin. 10 quick puzzles."),
+            "fork":    ("Fork theme", "Puzzle Trainer → motif filter: Fork. 10 quick puzzles."),
+            "hanging": ("HangingPiece theme", "Puzzle Trainer → motif filter: HangingPiece. 10 quick puzzles."),
+            "mate":    ("Mate theme", "Puzzle Trainer → motif filter: Mate. 10 quick puzzles."),
         }
-        name, hint = theme_map.get(top[0], ("Mixed", "lichess.org/training. 10 mixed puzzles."))
+        name, hint = theme_map.get(top[0], ("Mixed", "Puzzle Trainer. 10 mixed puzzles."))
         return Task(
-            label=f"Lichess puzzles: {name} — 10 puzzles (warm-up)",
+            label=f"Puzzle Trainer: {name} — 10 puzzles (warm-up)",
             duration_min=10,
             category="tactics",
             instructions=hint,
         )
     if primary == "mental_stability":
         return Task(
-            label="Lichess puzzles: 10 mixed puzzles — no hints, no take-backs",
+            label="Puzzle Trainer (Gauntlet mode): 10 mixed puzzles — commit, no take-backs",
             duration_min=10,
             category="tactics",
             instructions=(
-                "lichess.org/training, hints off. "
-                "Treat each puzzle like a real game decision: commit, don't second-guess. "
-                "Builds the deliberate thinking habit needed for stability."
+                "Open the Puzzle Trainer → enable 'Defensive Gauntlet'. "
+                "After each correct move the board flips and you must find the best defensive reply. "
+                "Treat every move like a real game decision: commit, don't second-guess. "
+                "This builds the deliberate thinking habit needed for mental stability."
             ),
         )
     if primary == "time_management":
@@ -817,11 +921,11 @@ def _warmup_for(primary: str, raw: dict) -> Task:
         )
     # Default warmup
     return Task(
-        label="Lichess puzzles: 10 mixed puzzles (warm-up)",
+        label="Puzzle Trainer: 10 mixed puzzles (warm-up)",
         duration_min=10,
         category="tactics",
         instructions=(
-            "lichess.org/training. No theme filter. "
+            "Puzzle Trainer (no motif filter). "
             "After each failure, note the theme. Over a week you will see your pattern gaps."
         ),
     )
@@ -898,10 +1002,11 @@ def _build_week(
     raw: dict,
     profile: dict,
     endgame_profile: dict | None = None,
+    puzzle_stats: dict | None = None,
 ) -> Week:
-    primary_pool   = _pool_for(primary, raw, endgame_profile)
-    secondary_pool = _pool_for(secondary, raw, endgame_profile)
-    warmup = _warmup_for(primary, raw)
+    primary_pool   = _pool_for(primary, raw, endgame_profile, puzzle_stats)
+    secondary_pool = _pool_for(secondary, raw, endgame_profile, puzzle_stats)
+    warmup = _warmup_for(primary, raw, puzzle_stats)
 
     time_control = TIME_CONTROLS.get(primary, TIME_CONTROLS["default"])
     subtitle = _week_subtitle(primary, raw, endgame_profile)
@@ -970,6 +1075,7 @@ def generate_training_plan(
     profile: dict,
     raw_metrics: dict | None = None,
     endgame_profile: dict | None = None,
+    puzzle_stats: dict | None = None,
 ) -> TrainingPlan:
     raw = raw_metrics or {}
     weaknesses = _identify_weaknesses(profile)
@@ -985,6 +1091,7 @@ def generate_training_plan(
             raw=raw,
             profile=profile,
             endgame_profile=endgame_profile,
+            puzzle_stats=puzzle_stats,
         )
         for wn in range(1, 5)
     ]
@@ -998,8 +1105,27 @@ def generate_training_plan(
             f"(score {primary_score:.0f}/100) — prioritise this above everything else this month."
         )
     if _get_score(profile, "tactics") < 60:
+        if puzzle_stats and puzzle_stats.get("recommended_motif"):
+            rec = puzzle_stats["recommended_motif"]
+            motif_acc = puzzle_stats.get("motif_accuracy", {})
+            acc = motif_acc.get(rec)
+            acc_str = f" (current accuracy: {round(acc * 100)}%)" if acc is not None else ""
+            display = _MOTIF_DISPLAY.get(rec, rec.replace("_", " ").title())
+            notes.append(
+                f"Tactics below 60 — daily warm-up is set to the Puzzle Trainer (in-app) "
+                f"with '{display}' focus{acc_str}. "
+                "Do these BEFORE any other exercise each day."
+            )
+        else:
+            notes.append(
+                "Tactics below 60 — do the warm-up puzzles every day BEFORE any other exercise."
+            )
+
+    if puzzle_stats and puzzle_stats.get("due_count", 0) > 0:
+        due = puzzle_stats["due_count"]
         notes.append(
-            "Tactics below 60 — do the warm-up puzzles every day BEFORE any other exercise."
+            f"{due} puzzle(s) are due for spaced-repetition review in the Puzzle Trainer. "
+            "Complete these first on any day you open the trainer — they take priority over new puzzles."
         )
     if _get_score(profile, "time_management") < 50:
         notes.append(

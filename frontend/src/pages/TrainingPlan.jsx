@@ -159,12 +159,14 @@ export default function TrainingPlan({ userId }) {
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [loadingSummary, setLoadingSummary] = useState(false)
+  const [stale, setStale] = useState(false)
 
   useEffect(() => {
     const fetch = async () => {
       try {
         const res = await getLatestPlan(userId)
         setPlan(res.data.plan)
+        setStale(res.data.stale || false)
       } catch {
         // No plan yet
       } finally {
@@ -179,6 +181,7 @@ export default function TrainingPlan({ userId }) {
     try {
       const res = await generatePlan(userId)
       setPlan(res.data.plan)
+      setStale(false)
     } catch (e) {
       alert(e.response?.data?.detail || e.message)
     } finally {
@@ -235,6 +238,23 @@ export default function TrainingPlan({ userId }) {
             {loadingSummary ? 'Generating…' : 'AI Performance Summary'}
           </button>
         </div>
+
+        {/* Stale plan warning */}
+        {stale && (
+          <div className="flex items-center gap-3 bg-yellow-900/30 border border-yellow-700/50 rounded-xl px-4 py-3 mb-6 text-sm">
+            <span className="text-yellow-400">⚠</span>
+            <span className="text-yellow-300 flex-1">
+              Your profile was updated after this plan was generated. Regenerate to get mode recommendations tailored to your current weaknesses.
+            </span>
+            <button
+              onClick={handleGenerate}
+              disabled={generating}
+              className="shrink-0 bg-yellow-600 hover:bg-yellow-500 text-white font-semibold px-3 py-1.5 rounded-lg text-xs disabled:opacity-50 transition-colors"
+            >
+              {generating ? 'Generating…' : 'Regenerate'}
+            </button>
+          </div>
+        )}
 
         {/* AI Summary */}
         {(summary || loadingSummary) && (

@@ -131,5 +131,7 @@ async def batch_analyze(game_ids: list[int], pgn_map: dict[int, str], depth: int
             await analyze_game(game_id=game_id, pgn_text=pgn_map[game_id], depth=depth)
             print(f"[analysis] Game {game_id} complete")
         except Exception as exc:
+            import traceback
             print(f"[analysis] Game {game_id} failed: {exc}")
+            traceback.print_exc()
             await _mark_failed(game_id, str(exc))
